@@ -465,9 +465,6 @@ loss = tf.reduce_mean(
 
 # We use the SGD optimizer.
 optimizer = tf.train.GradientDescentOptimizer(learning_rate=1.0).minimize(loss)
-
-            
-
 ```
 
 
@@ -500,6 +497,7 @@ with tf.Session() as sess:
                 
 print "\nOptimization Finished\n"
 ```
+
     Iter 172463, loss = 1.07693
     Iter 172464, loss = 1.23457
     Iter 172465, loss = 0.929267
@@ -872,6 +870,8 @@ def layer_norm(inputs,scale,shift,epsilon = 1e-5):
 ```
 
 ### Pre-generating all possible masks
+
+(Details about Transformers in general: https://arxiv.org/pdf/1706.03762.pdf)
 
 These masks are to be used to fill illegal positions with infinity (or a very high value eg. 2^30).
 
