@@ -1,7 +1,7 @@
 
 # Preprocessing Translation Data
 
-### Function for expanding english contractions
+### Function for expanding English contractions
 
 source: https://gist.github.com/nealrs/96342d8231b75cf4bb82
 
@@ -807,7 +807,7 @@ test_batch_y = PICK[9]
     
 ```
 
-### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
+### Function for converting vector ointo the closest representative English word. 
 
 
 ```python
