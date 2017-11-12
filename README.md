@@ -605,7 +605,8 @@ with tf.Session() as sess:
         step+=1
                 
 print "\nOptimization Finished\n"
-```.....
+```
+
     Iter 35806, loss = 0.918012
     Iter 35807, loss = 1.19433
     Iter 35808, loss = 0.576221
