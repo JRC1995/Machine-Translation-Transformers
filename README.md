@@ -807,7 +807,7 @@ test_batch_y = PICK[9]
     
 ```
 
-### Function for converting vector ointo the closest representative English word. 
+### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
 
 
 ```python
@@ -844,7 +844,7 @@ import tensorflow as tf
 
 h=8 #no. of heads
 N=3 #no. of decoder and encoder layers
-learning_rate=0.002
+learning_rate=0.008
 iters = 200
 max_len = 25
 keep_prob = tf.placeholder(tf.float32)
@@ -852,6 +852,7 @@ x = tf.placeholder(tf.float32, [None,None,word_vec_dim])
 y = tf.placeholder(tf.int32, [None,None])
 output_len = tf.placeholder(tf.int32)
 teacher_forcing = tf.placeholder(tf.bool)
+tf_mask = tf.placeholder(tf.float32,[None,None])
 ```
 
 ### Function for Layer Normalization 
@@ -871,8 +872,6 @@ def layer_norm(inputs,scale,shift,epsilon = 1e-5):
 ```
 
 ### Pre-generating all possible masks
-
-(Details about Transformers in general: https://arxiv.org/pdf/1706.03762.pdf)
 
 These masks are to be used to fill illegal positions with infinity (or a very high value eg. 2^30).
 
@@ -1115,13 +1114,13 @@ def model(x,y,teacher_forcing=True):
     scale_enc_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
     shift_enc_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
     scale_enc_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_enc_2 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_1 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_1 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_2 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_2 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_3 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_3 = tf.Variable(tf.ones([N,1,word_vec_dim]),dtype=tf.float32)
+    shift_enc_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    scale_dec_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    shift_dec_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    scale_dec_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    shift_dec_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    scale_dec_3 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+    shift_dec_3 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
     
     #Parameters for the linear layers converting decoder output to probability distibutions.   
     d=1024
@@ -1282,7 +1281,10 @@ output = model(x,y,teacher_forcing)
 
 #OPTIMIZER
 
-cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output, labels=y))
+cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output, labels=y)
+cost = tf.multiply(cost,tf_mask) #mask used to remove loss effect due to PADS
+cost = tf.reduce_mean(cost)
+
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate,beta1=0.9,beta2=0.98,epsilon=1e-9).minimize(cost)
 
 #wanna add some temperature?
@@ -1295,6 +1297,23 @@ softmax_output = tf.nn.softmax(scaled_output)"""
 
 softmax_output = tf.nn.softmax(output)
 
+```
+
+### Function to create a Mask
+
+The mask will have the same shape as the output batch but with the value 0 wherever there is a padding.
+The mask will be multipled to the cost (before its averaged), so that any position in the cost tensor that is effected by the pad will be multiplied by 0. This way, the effect of PADs (which we don't need to care about- Only the position of EOS is important) on the cost (and therefore on the gradients) can be nullified. 
+
+
+```python
+def create_Mask(output_batch):
+    pad_index = vocab_beng.index('<PAD>')
+    mask = np.ones_like((output_batch),np.float32)
+    for i in xrange(len(mask)):
+        for j in xrange(len(mask[i])):
+            if output_batch[i,j]==pad_index:
+                mask[i,j]=0
+    return mask
 ```
 
 ### Training .....
@@ -1348,12 +1367,15 @@ with tf.Session() as sess: # Start Tensorflow Session
             else:
                 random_bool = False
             
+            mask = create_Mask(train_batch_y[shuffled_indices[i]])
+            
             # Run optimization operation (backpropagation)
             _,loss,out = sess.run([optimizer,cost,softmax_output],
                                   feed_dict={x: (train_batch_x[shuffled_indices[i]]+pe_in), 
                                              y: train_batch_y[shuffled_indices[i]],
                                              keep_prob: 0.9,
                                              output_len: len(train_batch_y[shuffled_indices[i]][0]),
+                                             tf_mask: mask,
                                              teacher_forcing: random_bool
                                              })
             
@@ -1391,2709 +1413,63 @@ with tf.Session() as sess: # Start Tensorflow Session
 ```
 
     
-    CHOSEN SAMPLE NO.: 33
+    CHOSEN SAMPLE NO.: 43
     
     Epoch: 1 Iteration: 1
     
     SAMPLE TEXT:
-    tom continued yelling <EOS> 
+    can i eat <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    পডোতে ভযাবহ অপদসত করে। এলেন। নাচে।
+    বেডিযে বলছে ঠিকানাটা পালান নিস।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম চেচাতেই থাকলো। <EOS> <PAD> <PAD> 
+    আমি কি খেতে পারি <EOS> 
     
-    loss=8.20932
+    loss=6.56739
     
-    CHOSEN SAMPLE NO.: 45
+    CHOSEN SAMPLE NO.: 6
     
     Epoch: 1 Iteration: 2
     
     SAMPLE TEXT:
-    now listen carefully <EOS> 
+    the terrorists released the hostages <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <PAD> <PAD> <PAD> <PAD> <PAD>
+    <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    এবার মন দিযে শোনো। <EOS> 
+    আতঙকবাদীরা বনদিদের ছেডে দিলো। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=23.314
+    loss=161.808
     
-    CHOSEN SAMPLE NO.: 17
+    CHOSEN SAMPLE NO.: 57
     
     Epoch: 1 Iteration: 3
     
     SAMPLE TEXT:
-    we do not care what he does <EOS> 
+    when is the museum open <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
+    কে কে কে কে কে এখানে কে কে এটা
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    ও কী করে না করে আমরা তা কেযার করি না। <EOS> 
+    জাদঘরটা কখন খোলা থাকে <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=30.1632
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 1 Iteration: 4
-    
-    SAMPLE TEXT:
-    call tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম আমি টম আমার বাডিতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমকে ডাকো। <EOS> <PAD> <PAD> 
-    
-    loss=15.766
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 1 Iteration: 5
-    
-    SAMPLE TEXT:
-    bring it closer <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটা দিন। চিৎকার আমরা এটা সে এখানে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটাকে কাছে নিযে আসো। <EOS> <PAD> <PAD> 
-    
-    loss=10.3252
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 1 Iteration: 6
-    
-    SAMPLE TEXT:
-    success depends mostly on effort <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কটিল। বাডি শধ দেখতে দর তিনি হযেছি। করিযে পযানকেক
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সাফলয অধিকাংশ কষেতরে পরচেষটার উপর নিরভর করে। <EOS> <PAD> 
-    
-    loss=7.04045
-    
-    CHOSEN SAMPLE NO.: 32
-    
-    Epoch: 1 Iteration: 7
-    
-    SAMPLE TEXT:
-    you are always complaining <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> চাই। <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনারা সবসময অভিযোগ করেন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=6.53417
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 1 Iteration: 8
-    
-    SAMPLE TEXT:
-    where is the ticket counter <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> <PAD> ভিটামিন <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টিকিট কাউনটারটা কোথায <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.41661
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 1 Iteration: 9
-    
-    SAMPLE TEXT:
-    eat everything <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিনে অনমতি জিজঞাসা সকালের দযা ও
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সবকিছই খাও। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.97987
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 1 Iteration: 10
-    
-    SAMPLE TEXT:
-    tom has been injured <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> আসতে পদবিটি সেটা রাখন। শর আপনাকে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আহত হযেছে। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.75854
-    
-    CHOSEN SAMPLE NO.: 40
-    
-    Epoch: 1 Iteration: 11
-    
-    SAMPLE TEXT:
-    i wonder what i should get you for your birthday <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> এটে <PAD> <PAD> কত <PAD> <PAD> কথা দেবে। <EOS> <PAD> <PAD> <PAD> জনযে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ভাবছি তোমাকে জনমদিনে কী দেবো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.83102
-    
-    CHOSEN SAMPLE NO.: 12
-    
-    Epoch: 1 Iteration: 12
-    
-    SAMPLE TEXT:
-    he is eating lunch now <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <EOS> <PAD> <PAD> আমাকে <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উনি এখন লাঞচ করছেন। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.0865
-    
-    CHOSEN SAMPLE NO.: 62
-    
-    Epoch: 1 Iteration: 13
-    
-    SAMPLE TEXT:
-    i 'm going to take a bath <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চেচালো। আমাদের <PAD> কেন <PAD> <EOS> <EOS> <EOS> <EOS> দেরী
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি সনান করতে যাবো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.57745
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 1 Iteration: 14
-    
-    SAMPLE TEXT:
-    where can i buy that magazine <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হযে একলা জিজঞাসা কাশলেন। এসি অফিসে আজ থাকবেন <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওই পতরিকাটা কোথা থেকে কিনতে পারব <EOS> <PAD> 
-    
-    loss=5.6702
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 1 Iteration: 15
-    
-    SAMPLE TEXT:
-    children love doing this <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> দদিনে না খোলে হযেছি। কারণ না।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাচচারা এগলো করতে ভালোবাসে। <EOS> <PAD> <PAD> 
-    
-    loss=5.06569
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 1 Iteration: 16
-    
-    SAMPLE TEXT:
-    is this seat empty <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কিনত <PAD> তেমন সাথে <EOS> চাবি। আছি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এই সীটটা কি ফাকা আছে <EOS> <PAD> 
-    
-    loss=4.98385
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 1 Iteration: 17
-    
-    SAMPLE TEXT:
-    he eats nothing but fruit <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <EOS> খব ফেলেছি এলেন। গেছে। <PAD> কম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে ফল ছাডা আর কিছই খায না। <EOS> <PAD> 
-    
-    loss=4.68397
-    
-    CHOSEN SAMPLE NO.: 33
-    
-    Epoch: 1 Iteration: 18
-    
-    SAMPLE TEXT:
-    how much is this <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যাব। কোনো শর <EOS> আমি আমি কেন চান
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটা কত <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.43482
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 1 Iteration: 19
-    
-    SAMPLE TEXT:
-    listen carefully <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> টম আমি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মন দিযে শনবে। <EOS> <PAD> <PAD> 
-    
-    loss=4.56151
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 1 Iteration: 20
-    
-    SAMPLE TEXT:
-    tom coughs a lot <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <PAD> <PAD> আমি এটা <PAD> টরেনে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম খব কাশে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.96252
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 1 Iteration: 21
-    
-    SAMPLE TEXT:
-    i am busy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তারা যাইনি। <PAD> <PAD> আমরা করতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বযসত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.53902
-    
-    CHOSEN SAMPLE NO.: 8
-    
-    Epoch: 1 Iteration: 22
-    
-    SAMPLE TEXT:
-    i live here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সতরী। কোথায বযবহার চযানেলটা চাই। বোতাম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এখানে থাকি। <EOS> <PAD> <PAD> 
-    
-    loss=4.7305
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 1 Iteration: 23
-    
-    SAMPLE TEXT:
-    is your watch correct <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চেষটা <PAD> ডাকন। <EOS> টম চেচাচছো বেশীই বিভরানত
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার ঘডি ঠিক আছে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.47656
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 1 Iteration: 24
-    
-    SAMPLE TEXT:
-    would you like to come <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি ওর টম <PAD> ফল কে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি আসতে চান <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=5.20824
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 1 Iteration: 25
-    
-    SAMPLE TEXT:
-    no problem <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ছাড তমি তিনি <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কোনো অসবিধা নেই <EOS> <PAD> 
-    
-    loss=4.89407
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 1 Iteration: 26
-    
-    SAMPLE TEXT:
-    tom is as big as i am <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> ছিলাম। <PAD> ওটা <PAD> <PAD> না। পরাতঃরাশের <PAD> <EOS> <EOS> কথা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আমার মতই বডো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.58395
-    
-    CHOSEN SAMPLE NO.: 20
-    
-    Epoch: 1 Iteration: 27
-    
-    SAMPLE TEXT:
-    you do not understand <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <PAD> ওখানে শিকষক নাম দাও। <EOS> সেটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনারা বোঝেন না। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.36749
-    
-    CHOSEN SAMPLE NO.: 16
-    
-    Epoch: 1 Iteration: 28
-    
-    SAMPLE TEXT:
-    do you want to eat now or later <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> ফিরে ভাল <PAD> বনধ পডেছি। <PAD> <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি এখন খেতে চাও না পরে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.85434
-    
-    CHOSEN SAMPLE NO.: 31
-    
-    Epoch: 1 Iteration: 29
-    
-    SAMPLE TEXT:
-    turn left at the corner <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাইকটা <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মোডে গিযে বাদিকে বেকে যাবেন। <EOS> <PAD> <PAD> 
-    
-    loss=5.1344
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 1 Iteration: 30
-    
-    SAMPLE TEXT:
-    how many museums did you visit <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চযানেলটা <PAD> লাগেনি। ভালো বাস আমাকে খাওযার কম করছে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কতগলো জাদঘর ঘরেছো <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.30194
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 1 Iteration: 31
-    
-    SAMPLE TEXT:
-    i did my work <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> গেছে নতন করন। <PAD> আমরা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আমার কাজ করলাম। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.44533
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 1 Iteration: 32
-    
-    SAMPLE TEXT:
-    i 'd be grateful <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> চেষটা দেখক। ছবি হযেছে। বললাম। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কতজঞ থাকবো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.88166
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 1 Iteration: 33
-    
-    SAMPLE TEXT:
-    i 've been hoping you would drop in <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরিষকার <EOS> <PAD> কি <PAD> এটা আগে কোনো যেতে <PAD> <PAD> এই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ভাবছিলাম আপনি এসে উপসথিত হবেন। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.88528
-    
-    CHOSEN SAMPLE NO.: 25
-    
-    Epoch: 1 Iteration: 34
-    
-    SAMPLE TEXT:
-    may i eat <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এই দিন। <PAD> <PAD> না। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কি খেতে পারি <EOS> <PAD> 
-    
-    loss=4.3566
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 1 Iteration: 35
-    
-    SAMPLE TEXT:
-    she is younger than me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> চেচালো। খেযে চম <PAD> কাজটা কত <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে আমার থেকে ছোট। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.79859
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 1 Iteration: 36
-    
-    SAMPLE TEXT:
-    tom does not look very happy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিলাম। খেলো। লিফট <PAD> <EOS> কষমা এসেছিলো। শর কেমন <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমকে দেখে খব খশি বলে মনে হচচে না। <EOS> <PAD> 
-    
-    loss=4.83564
-    
-    CHOSEN SAMPLE NO.: 36
-    
-    Epoch: 1 Iteration: 37
-    
-    SAMPLE TEXT:
-    may i use a credit card <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খাচছেন। <PAD> পিছ <EOS> কোন ভালো ওরা ২০১৩ পরেছিলাম। এটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কি করেডিট কারড বযবহার করতে পারি <EOS> <PAD> <PAD> 
-    
-    loss=4.62498
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 1 Iteration: 38
-    
-    SAMPLE TEXT:
-    take us there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> এক <PAD> ছবিটার রাখন। বঝতে রাখ।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাদের ওখানে নিযে চলো। <EOS> <PAD> <PAD> 
-    
-    loss=4.12933
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 1 Iteration: 39
-    
-    SAMPLE TEXT:
-    tom tried to keep from smiling <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> দিযেছে। <PAD> আমি <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম না হাসার চেষটা করছিলেন। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.68603
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 1 Iteration: 40
-    
-    SAMPLE TEXT:
-    it is rather cold today <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    একবার জানেন <PAD> <PAD> চিনতা ইচছে <PAD> করন <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আজ বেশ ঠানডা আছে। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.37035
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 1 Iteration: 41
-    
-    SAMPLE TEXT:
-    how can i get to the hospital by bus <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    অনগরহ ওখানেই ওযাইকিকি কাছে ডানদিকে <EOS> আমরা <PAD> <EOS> <PAD> যোগাযোগ টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বাসে করে হাসপাতালে কিভাবে যাব <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.38092
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 1 Iteration: 42
-    
-    SAMPLE TEXT:
-    i 'm sorry but it is impossible <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরকতই টম উচ লাগছে। পারেন। <PAD> না। <PAD> ডেকেছিলে <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমায কষমা করবেন কিনত এটা সমভব নয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.45662
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 1 Iteration: 43
-    
-    SAMPLE TEXT:
-    call me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তোমারে করলেন। পাশ দৌডাল গেছিলাম।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাকে ডেক। <EOS> <PAD> <PAD> 
-    
-    loss=5.16164
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 1 Iteration: 44
-    
-    SAMPLE TEXT:
-    you are always complaining <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> অবধি <PAD> <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি সবসময অভিযোগ করেন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.31976
-    
-    CHOSEN SAMPLE NO.: 36
-    
-    Epoch: 1 Iteration: 45
-    
-    SAMPLE TEXT:
-    go wait outside <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <EOS> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাইরে গিযে অপেকষা করো। <EOS> <PAD> <PAD> 
-    
-    loss=4.25997
-    
-    CHOSEN SAMPLE NO.: 40
-    
-    Epoch: 1 Iteration: 46
-    
-    SAMPLE TEXT:
-    there is no way i 'm leaving you here alone with tom <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> আমি <PAD> <EOS> টম <PAD> <PAD> <PAD> টম <EOS> <PAD> কিনতে <EOS> <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কোনমতেই তোমাকে এখানে টমের সাথে একলা ছেডে রেখে যেতে পারবো না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.66735
-    
-    CHOSEN SAMPLE NO.: 44
-    
-    Epoch: 1 Iteration: 47
-    
-    SAMPLE TEXT:
-    what you said is not true <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> বলবেন <EOS> কিছ <EOS> যাওযা <PAD> <PAD> আমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি যা বললে তা সতযি নয। <EOS> <PAD> <PAD> 
-    
-    loss=4.76324
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 1 Iteration: 48
-    
-    SAMPLE TEXT:
-    i play football <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পারি। মজার চিনী বযবসথা মত <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ফটবল খেলি। <EOS> <PAD> <PAD> 
-    
-    loss=4.73921
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 1 Iteration: 49
-    
-    SAMPLE TEXT:
-    write your address here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কোরো আমার চপচাপ চপ <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এখানে আপনার ঠিকানা লিখন। <EOS> <PAD> 
-    
-    loss=5.06292
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 1 Iteration: 50
-    
-    SAMPLE TEXT:
-    we are desperate to find a solution <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> ছিল আপনার <EOS> তমি <EOS> <PAD> কত ফরাসি কি এসে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা একটি সমাধান খোজার জনয মরিযা হযে আছি। <EOS> <PAD> <PAD> 
-    
-    loss=4.82761
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 1 Iteration: 51
-    
-    SAMPLE TEXT:
-    he got angry <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চান টম কলানত। বইটা বরেকফাসট
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উনি রেগে গেছিলেন। <EOS> <PAD> 
-    
-    loss=4.98967
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 2 Iteration: 1
-    
-    SAMPLE TEXT:
-    i 'm tom 's wife <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কিনতে এখানে। <PAD> কি কে <EOS> না। মন এটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি টমের সতরী। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.19294
-    
-    CHOSEN SAMPLE NO.: 8
-    
-    Epoch: 2 Iteration: 2
-    
-    SAMPLE TEXT:
-    what exactly has tom done <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> <PAD> <EOS> <EOS> <EOS> গেছে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম ঠিক কী করেছে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.53906
-    
-    CHOSEN SAMPLE NO.: 33
-    
-    Epoch: 2 Iteration: 3
-    
-    SAMPLE TEXT:
-    we are trapped <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> খব চিৎকার <PAD> <PAD> আমরা <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা আটকে পরেছি। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.86885
-    
-    CHOSEN SAMPLE NO.: 32
-    
-    Epoch: 2 Iteration: 4
-    
-    SAMPLE TEXT:
-    i screamed <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    শর করছি। <PAD> পছনদ <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি চিৎকার করলাম। <EOS> <PAD> 
-    
-    loss=4.40573
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 2 Iteration: 5
-    
-    SAMPLE TEXT:
-    can you help me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ভারা অনগরহ <PAD> <EOS> <PAD> সে এসেছে। টমের
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি আমাকে সাহাযয করতে পারবেন <EOS> <PAD> 
-    
-    loss=3.98898
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 2 Iteration: 6
-    
-    SAMPLE TEXT:
-    i was away <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <PAD> রাসতা হচছে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বাইরে ছিলাম। <EOS> <PAD> 
-    
-    loss=4.78602
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 7
-    
-    SAMPLE TEXT:
-    there is room inside <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কথা করলো। সীটটা হতে সময ভেতরে ডাকতার। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ভেতরে একটা ঘর আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.99248
-    
-    CHOSEN SAMPLE NO.: 10
-    
-    Epoch: 2 Iteration: 8
-    
-    SAMPLE TEXT:
-    i 'm not denying that <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> নডলস বাপ <PAD> <PAD> <PAD> <PAD> আপনাকে <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওটা অসবীকার করছি না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.1744
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 9
-    
-    SAMPLE TEXT:
-    where will tom go <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরেছিলাম। <EOS> সমভব করলো। এটা <EOS> <PAD> তারাতারি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কোথায যাবে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.09275
-    
-    CHOSEN SAMPLE NO.: 38
-    
-    Epoch: 2 Iteration: 10
-    
-    SAMPLE TEXT:
-    why do you want to leave today <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ডাকতার। <EOS> করতে দৌডে ঠিক সঙগে <PAD> <EOS> <EOS> পছনদ <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি আজকেই যেতে চাইছেন কেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.20466
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 2 Iteration: 11
-    
-    SAMPLE TEXT:
-    open your mouth <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চলন। বসটনে দাডি করত। আপনাদেরকে <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মখ খোলো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.13812
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 2 Iteration: 12
-    
-    SAMPLE TEXT:
-    we are not yet sure what the problem is <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করে চিঠি রাতরি গেছিল। তৈরি <PAD> <PAD> <PAD> <EOS> <PAD> ওর ছিলাম।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমারা সমসযাটার বযাপারে এখনো নিশচিত হইনি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.20972
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 2 Iteration: 13
-    
-    SAMPLE TEXT:
-    what he said is not true <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখানেই সব কেন <PAD> আমি <EOS> <PAD> ওই <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও যা বললো তা সতযি নয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.08967
-    
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 2 Iteration: 14
-    
-    SAMPLE TEXT:
-    what do you want to be when you grow up <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমকে শহর সাহস তমি নিচে <EOS> <EOS> পছনদ <EOS> <EOS> <EOS> কর। <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি বডো হযে কী হতে চাও <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.01999
-    
-    CHOSEN SAMPLE NO.: 36
-    
-    Epoch: 2 Iteration: 15
-    
-    SAMPLE TEXT:
-    i 've finished my work <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    রেখে বঝতে অপদসত ডাকতার কেন কোথায <PAD> <PAD> কেউ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আমার কাজ শেষ করেছি। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.15386
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 2 Iteration: 16
-    
-    SAMPLE TEXT:
-    they screamed <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যদধটা দিন। পারেন। পারেন। সব
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওনারা চিৎকার করলেন। <EOS> <PAD> 
-    
-    loss=5.0103
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 17
-    
-    SAMPLE TEXT:
-    which hat is yours <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ভালোবাসা একবার করে <EOS> চেচালাম। পডতে তমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কোন টপিটা তোমার <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.33538
-    
-    CHOSEN SAMPLE NO.: 30
-    
-    Epoch: 2 Iteration: 18
-    
-    SAMPLE TEXT:
-    i 'm still your friend <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <PAD> <PAD> খায <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এখনো তোমাদের বনধ আছি। <EOS> <PAD> <PAD> 
-    
-    loss=5.00796
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 2 Iteration: 19
-    
-    SAMPLE TEXT:
-    who is screaming <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> <EOS> হযেছে। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কে চেচাচছে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.20484
-    
-    CHOSEN SAMPLE NO.: 4
-    
-    Epoch: 2 Iteration: 20
-    
-    SAMPLE TEXT:
-    you should eat vegetables <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বারে <PAD> আপনাকে <PAD> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার শাকসবজি খাওযা উচিত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.18169
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 2 Iteration: 21
-    
-    SAMPLE TEXT:
-    tom is a bit shorter than mary <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> <EOS> <PAD> হযেছে। আমি টম হয। জীবন <EOS> একলা করো। এটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম মেরির থেকে একট বেটে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.18676
-    
-    CHOSEN SAMPLE NO.: 56
-    
-    Epoch: 2 Iteration: 22
-    
-    SAMPLE TEXT:
-    i am going to osaka station <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হাত আজ আমাকে কি <PAD> <PAD> সতযি দেখে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওসাকা সটেশনে যাচছি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.69879
-    
-    CHOSEN SAMPLE NO.: 8
-    
-    Epoch: 2 Iteration: 23
-    
-    SAMPLE TEXT:
-    why are you shouting <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনার আমি চযানেলটা <PAD> <PAD> বযাপারে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি চেচাচছো কেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.47645
-    
-    CHOSEN SAMPLE NO.: 42
-    
-    Epoch: 2 Iteration: 24
-    
-    SAMPLE TEXT:
-    do you still read books <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কে বসটনে মোটামটি অরথ পরের গাডি <PAD> বেচে ওখানে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি এখনো বই পডেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.50996
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 2 Iteration: 25
-    
-    SAMPLE TEXT:
-    tom does not look very happy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বলছে সাথে অবসথাটা আপনি বেকারিতে <EOS> আমি <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমকে দেখে খব খশি বলে মনে হচচে না। <EOS> <PAD> 
-    
-    loss=4.5684
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 2 Iteration: 26
-    
-    SAMPLE TEXT:
-    tom is dreadfully wrong <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    অপেকষা <PAD> <PAD> <EOS> <PAD> শেখো <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম মারাতমক ভাবে ভল। <EOS> <PAD> <PAD> 
-    
-    loss=4.48781
-    
-    CHOSEN SAMPLE NO.: 4
-    
-    Epoch: 2 Iteration: 27
-    
-    SAMPLE TEXT:
-    we will help <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> গরামটাকে <EOS> <PAD> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা সাহাযয করব। <EOS> <PAD> <PAD> 
-    
-    loss=4.63347
-    
-    CHOSEN SAMPLE NO.: 23
-    
-    Epoch: 2 Iteration: 28
-    
-    SAMPLE TEXT:
-    we are going the wrong way <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    না আপনার <PAD> খোলে <PAD> আছে <EOS> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা ভল রাসতায যাচছি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.96231
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 2 Iteration: 29
-    
-    SAMPLE TEXT:
-    she is eating fruit <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নয। কষেতরে ফেলেছি মাতভাষা <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তিনি ফল খাচচেন। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.98182
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 2 Iteration: 30
-    
-    SAMPLE TEXT:
-    she went to paris to see her aunt <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> বইটা <PAD> মেরি খাবেন <PAD> <EOS> <PAD> সাতটার সখী করতে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে পযারিস গেছে তার কাকিমার সঙগে দেখা করতে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.45319
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 2 Iteration: 31
-    
-    SAMPLE TEXT:
-    we are arabs <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনার নিন। নই। তোমার করবেন <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা আরব। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.30661
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 2 Iteration: 32
-    
-    SAMPLE TEXT:
-    tom does not want to see you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চাবি <PAD> আমাকে বাস কখনো করে কি না আপনি আমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম তোমার সঙগে দেখা করতে চায না। <EOS> <PAD> <PAD> 
-    
-    loss=4.88417
-    
-    CHOSEN SAMPLE NO.: 28
-    
-    Epoch: 2 Iteration: 33
-    
-    SAMPLE TEXT:
-    he decided not to go to the party <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কল আমেরিকান <PAD> <PAD> শিখেছি। <PAD> <PAD> <PAD> <PAD> আমি <PAD> টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তিনি পারটিতে না যাওযাই ঠিক করলেন। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.54944
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 2 Iteration: 34
-    
-    SAMPLE TEXT:
-    my shoulders hurt <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খেলি। ইচছা কথা <PAD> <PAD> ওনার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার কাধ বযাথা করছে। <EOS> <PAD> 
-    
-    loss=4.51995
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 2 Iteration: 35
-    
-    SAMPLE TEXT:
-    have you ever visited boston <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    শর তার কে নতন জাপান আমার <PAD> জমা <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি কখনো বসটন দেখতে গেছো <EOS> <PAD> <PAD> 
-    
-    loss=4.39666
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 36
-    
-    SAMPLE TEXT:
-    i fell in love with him <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আজ <PAD> বডড <EOS> আর <PAD> আছে। আমি <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তার পরেমে পডে গেলাম। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.97433
-    
-    CHOSEN SAMPLE NO.: 34
-    
-    Epoch: 2 Iteration: 37
-    
-    SAMPLE TEXT:
-    go slow <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কথা লকষ <PAD> মত করে। ঘমানো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আসতে যা। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.85364
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 2 Iteration: 38
-    
-    SAMPLE TEXT:
-    tom stopped talking as soon as he noticed mary was not listening anymore <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি তমি তারা হযতো ককরকে <PAD> সে <PAD> <PAD> করেন <PAD> জতো <PAD> তাডাতাডি আসো। পরে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম যখন দেখলো যে মেরি আর কথা শনছে না তখন সে সঙগে সঙগে কথা বনধ করে দিলো। <EOS> 
-    
-    loss=5.12669
+    loss=101.757
     
     CHOSEN SAMPLE NO.: 19
     
-    Epoch: 2 Iteration: 39
-    
-    SAMPLE TEXT:
-    why me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করব। আমি সবাই <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমিই কেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.79779
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 2 Iteration: 40
-    
-    SAMPLE TEXT:
-    i need new soles on these shoes <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খাচছি। ভত <PAD> <PAD> <PAD> <PAD> আর <PAD> এই আমি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এই জতোগলোর জনয নতন সকতলা চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.66124
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 2 Iteration: 41
-    
-    SAMPLE TEXT:
-    eat whatever food you like <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমকে এসে <PAD> জামা দেখা <PAD> ঠিক <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার যে খাবার পছনদ হয সেটা খান। <EOS> 
-    
-    loss=4.67541
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 2 Iteration: 42
-    
-    SAMPLE TEXT:
-    be quiet <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সময এখনও ভেবে <PAD> কোনো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    চপ কর। <EOS> <PAD> <PAD> 
-    
-    loss=4.21478
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 2 Iteration: 43
-    
-    SAMPLE TEXT:
-    who would believe me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আজকের আমার না। অসফল <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কাকে বিশবাস করবেন <EOS> <PAD> <PAD> 
-    
-    loss=4.37287
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 2 Iteration: 44
-    
-    SAMPLE TEXT:
-    i love football <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখানে এখন <EOS> টমের <EOS> ইচছে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ফটবল ভালোবাসি। <EOS> <PAD> <PAD> 
-    
-    loss=4.11787
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 2 Iteration: 45
-    
-    SAMPLE TEXT:
-    what time does the ship leave <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> জিনিস না <PAD> যেতে <PAD> <PAD> <PAD> এলো। পেযেছেন।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    জাহাজটা কটার সময ছাডে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.48653
-    
-    CHOSEN SAMPLE NO.: 32
-    
-    Epoch: 2 Iteration: 46
-    
-    SAMPLE TEXT:
-    why do you want to hurt tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> ঘমানো <EOS> <EOS> <PAD> <EOS> <PAD> <EOS> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি টমকে আঘাত দিতে চান কেন <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.91589
-    
-    CHOSEN SAMPLE NO.: 33
-    
-    Epoch: 2 Iteration: 47
-    
-    SAMPLE TEXT:
-    tom will speak <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বলে। হবে ডান <EOS> আমার সাথে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কথা বলবে। <EOS> <PAD> <PAD> 
-    
-    loss=3.93453
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 2 Iteration: 48
-    
-    SAMPLE TEXT:
-    a car hit tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আনদাজ টম <EOS> দ <PAD> <PAD> <PAD> ছাডে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    একটা গাডী টমকে ধাককা মারল। <EOS> <PAD> <PAD> 
-    
-    loss=3.95405
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 2 Iteration: 49
-    
-    SAMPLE TEXT:
-    who is that <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দেখেছিলাম। <EOS> খশি <EOS> করছে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটা কে <EOS> <PAD> <PAD> 
-    
-    loss=4.71445
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 2 Iteration: 50
-    
-    SAMPLE TEXT:
-    i have not tried <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আছে খশি <PAD> <PAD> চেষটা <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি চেষটা করিনি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.81262
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 2 Iteration: 51
-    
-    SAMPLE TEXT:
-    leave it there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> আছেন <EOS> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটা ওখানেই রাখন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.60077
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 3 Iteration: 1
-    
-    SAMPLE TEXT:
-    please speak slowly <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> ফাকা সেটা কি <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    অনগরহ করে আসতে কথা বলন। <EOS> <PAD> 
-    
-    loss=3.69819
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 3 Iteration: 2
-    
-    SAMPLE TEXT:
-    would you like to come <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাচচাদের তিনি করতে <PAD> <EOS> আমি <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি আসতে চান <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.67028
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 3 Iteration: 3
-    
-    SAMPLE TEXT:
-    tom grew up in boston <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পেযেছে যাবো। <PAD> <EOS> <EOS> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম বসটনে বডো হযেছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.43666
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 3 Iteration: 4
-    
-    SAMPLE TEXT:
-    nobody is speaking <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সথির এক যদধে থাকেন। <PAD> আছে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কেউ কথা বলছেন না। <EOS> <PAD> 
-    
-    loss=4.25782
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 3 Iteration: 5
-    
-    SAMPLE TEXT:
-    we are all scared <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    একজন খোজা সেটা না <EOS> <PAD> যাও।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা সবাই ভিত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.17715
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 3 Iteration: 6
-    
-    SAMPLE TEXT:
-    stop there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাডি করলেন। <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওখানেই থামো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.53829
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 3 Iteration: 7
-    
-    SAMPLE TEXT:
-    what time does the train reach osaka <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হরদটা <EOS> ও হাত-ঘডিটা <PAD> <PAD> <EOS> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টরেনটা কটার সময ওসাকা পৌছায <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.41385
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 3 Iteration: 8
-    
-    SAMPLE TEXT:
-    tom ate breakfast alone <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমাকে টম কেন <PAD> <EOS> <PAD> <PAD> তার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম একলা একলা বরেকফাসট খেলো। <EOS> <PAD> <PAD> 
-    
-    loss=3.97969
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 3 Iteration: 9
-    
-    SAMPLE TEXT:
-    tom brought this <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হচছে। পরতযেকে ওটা আমার <PAD> একলা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম এটা নিযে এসেছিল। <EOS> <PAD> 
-    
-    loss=3.90411
-    
-    CHOSEN SAMPLE NO.: 45
-    
-    Epoch: 3 Iteration: 10
-    
-    SAMPLE TEXT:
-    he does not eat anything other than fruit <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কেদেছিলেন। বাইরে কেউ ভালো <PAD> <PAD> <PAD> <PAD> দর <PAD> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উনি ফল ছাডা অনয কিছ খান না। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.59867
-    
-    CHOSEN SAMPLE NO.: 16
-    
-    Epoch: 3 Iteration: 11
-    
-    SAMPLE TEXT:
-    i 'll buy it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সহজ। নাম করতে <PAD> <EOS> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এটা কিনবো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.10658
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 3 Iteration: 12
-    
-    SAMPLE TEXT:
-    he spoke <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বলন <PAD> টমের <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তিনি বললেন। <EOS> <PAD> <PAD> 
-    
-    loss=4.34343
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 3 Iteration: 13
-    
-    SAMPLE TEXT:
-    do you think we can find someone to replace tom <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পৌছাননি। যেত কি এতে <PAD> করি। <PAD> আমার <PAD> <EOS> <PAD> <PAD> <PAD> <PAD> যাবো। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি মনে করো যে টমের বদলে আর কাউকে পাওযা যাবে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.07371
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 3 Iteration: 14
-    
-    SAMPLE TEXT:
-    stop right here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যাও। পালটাতে খশি <PAD> পারি <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এখানেই থামন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.78698
-    
-    CHOSEN SAMPLE NO.: 31
-    
-    Epoch: 3 Iteration: 15
-    
-    SAMPLE TEXT:
-    is mary your daughter <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হারিযে <EOS> খোলে <EOS> এইসমসত বলছিলো। যেতে <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মেরি কি আপনার মেযে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.75275
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 3 Iteration: 16
-    
-    SAMPLE TEXT:
-    i promised <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চান অতিবেগনী আমাদের <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি পরতিশরতি দিলাম। <EOS> <PAD> 
-    
-    loss=4.17088
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 3 Iteration: 17
-    
-    SAMPLE TEXT:
-    meat should not be eaten raw <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যাবো। করো। <PAD> <PAD> <PAD> <PAD> <PAD> কি <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মাংস কাচা খাওযা উচিৎ নয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.90786
-    
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 3 Iteration: 18
-    
-    SAMPLE TEXT:
-    the ambassador returned <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    গলপ <PAD> <EOS> টম <EOS> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    রাষটরদতটি ফিরে এলেন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.3319
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 3 Iteration: 19
-    
-    SAMPLE TEXT:
-    she did not tell me her name <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি মজা <EOS> <PAD> <PAD> সঙগে <PAD> <PAD> <EOS> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তিনি আমাকে তার নাম বলেননি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.73823
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 3 Iteration: 20
-    
-    SAMPLE TEXT:
-    i 'm screaming <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ডাকবেন। হাটো। ফোন <PAD> <PAD> বলন।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি চেচাচছি। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.80593
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 3 Iteration: 21
-    
-    SAMPLE TEXT:
-    you deserve the prize <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> আগে না। পারছি। <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি এই পরষকারটির যোগয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.61348
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 3 Iteration: 22
-    
-    SAMPLE TEXT:
-    your book is on the desk <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মনে সতেরোতম <PAD> <PAD> <EOS> <PAD> <PAD> তোমার <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার বই ডেসকের উপর রযেছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.52503
-    
-    CHOSEN SAMPLE NO.: 42
-    
-    Epoch: 3 Iteration: 23
-    
-    SAMPLE TEXT:
-    accidents will happen <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যান। নেই। কযাশার করন। <PAD> কি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    দরঘটনা ঘটবেই। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.91224
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 3 Iteration: 24
-    
-    SAMPLE TEXT:
-    why are not you coming with us <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মগ। তোমরা এখানে <EOS> <PAD> <PAD> টম <EOS> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাদের সাথে আসছেন না কেন <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.70056
-    
-    CHOSEN SAMPLE NO.: 51
-    
-    Epoch: 3 Iteration: 25
-    
-    SAMPLE TEXT:
-    i 'm never wrong <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আছেন বলেছিল সাধারণ <PAD> <EOS> <PAD> <EOS> আছে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কখনই ভল করি না। <EOS> <PAD> <PAD> 
-    
-    loss=3.61648
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 3 Iteration: 26
-    
-    SAMPLE TEXT:
-    there is so much i want to say to you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চেচাচছে। সে <PAD> <EOS> <PAD> <PAD> <PAD> একজন করি <PAD> বলতে টম <PAD> নাও।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনাকে আমার কত কিছ বলার ইচছা আছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.96401
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 3 Iteration: 27
-    
-    SAMPLE TEXT:
-    who would believe me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি দিকে <PAD> <EOS> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কাকে বিশবাস করবেন <EOS> <PAD> <PAD> 
-    
-    loss=4.00679
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 3 Iteration: 28
-    
-    SAMPLE TEXT:
-    i can only speak french and a little english <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    গরহণ গাডি হযেছে রেখে <PAD> <PAD> <PAD> <PAD> <EOS> <PAD> <PAD> করছো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি খালি ফরাসি আর একট ইংরাজিতে কথা বলতে পারি। <EOS> <PAD> <PAD> 
-    
-    loss=5.09598
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 3 Iteration: 29
-    
-    SAMPLE TEXT:
-    tom certainly is good-looking <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খেলতাম। ভালোভাবে করতে করছিলাম আছে। পেলো। <PAD> সময
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম সতযিই খব সদরশন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.96998
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 3 Iteration: 30
-    
-    SAMPLE TEXT:
-    is everybody ready <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    একটা বাইরে শনেছেন করলো। পরায
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সবাই তৈরি <EOS> <PAD> <PAD> 
-    
-    loss=4.76945
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 3 Iteration: 31
-    
-    SAMPLE TEXT:
-    i can not find my luggage <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার। খালি জবাব যাক। <EOS> সঙগে <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আমার মালপতর খজে পাচছি না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.04935
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 3 Iteration: 32
-    
-    SAMPLE TEXT:
-    we are desperate to find a solution <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি ফরাসিতে টমের দেখছে আমার <PAD> <PAD> <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা একটি সমাধান খোজার জনয মরিযা হযে আছি। <EOS> <PAD> <PAD> 
-    
-    loss=4.41382
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 3 Iteration: 33
-    
-    SAMPLE TEXT:
-    he tries <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটাকে পরে পারি। <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও চেষটা করে। <EOS> <PAD> <PAD> 
-    
-    loss=3.69723
-    
-    CHOSEN SAMPLE NO.: 60
-    
-    Epoch: 3 Iteration: 34
-    
-    SAMPLE TEXT:
-    what is today 's date <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> আমি টম। <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আজকের তারিখ কত <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.10313
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 3 Iteration: 35
-    
-    SAMPLE TEXT:
-    got it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি <EOS> পৌছালাম। <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বঝেছিস <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.92349
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 3 Iteration: 36
-    
-    SAMPLE TEXT:
-    tom waited outside the gate <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সকলে তার কথা জানে। <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম গেটের বাইরে অপেকষা করলো। <EOS> <PAD> <PAD> 
-    
-    loss=4.48869
-    
-    CHOSEN SAMPLE NO.: 62
-    
-    Epoch: 3 Iteration: 37
-    
-    SAMPLE TEXT:
-    tom has time <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বযগ। গেলো। অপেকষা <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমের হাতে সময আছে। <EOS> <PAD> <PAD> 
-    
-    loss=3.43815
-    
-    CHOSEN SAMPLE NO.: 25
-    
-    Epoch: 3 Iteration: 38
-    
-    SAMPLE TEXT:
-    arabic is a very important language <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এ এর <PAD> পারো <PAD> <PAD> <PAD> <PAD> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আরবী খব গরতবপরণ ভাষা। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.40109
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 3 Iteration: 39
-    
-    SAMPLE TEXT:
-    she was wearing a black hat <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি কোথায করেন বাজারে <EOS> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে একটা কালো টপি পরেছিল। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.80626
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 3 Iteration: 40
-    
-    SAMPLE TEXT:
-    the soldiers occupied the building <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তিনি আসবে সঙগে আমেরিকান <PAD> <EOS> বনধ <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সৈনয বাডিটাকে দখল করলো। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.01123
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 3 Iteration: 41
-    
-    SAMPLE TEXT:
-    i am starting this evening <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এসেছি। আমি বসো করেছেন ছোট। <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আজ সনধযেতে শর করব। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.92855
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 3 Iteration: 42
-    
-    SAMPLE TEXT:
-    i want to talk to tom alone <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ডাকতার। ভালো বনধ না। সঙগীত <PAD> <PAD> <PAD> <PAD> নয। <EOS> চলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি টমের সঙগে একলা কথা বলতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.77554
-    
-    CHOSEN SAMPLE NO.: 25
-    
-    Epoch: 3 Iteration: 43
-    
-    SAMPLE TEXT:
-    tom is wounded <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম এটা থেকে <PAD> বাডি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আহত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.28968
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 3 Iteration: 44
-    
-    SAMPLE TEXT:
-    i believe tom is doing well <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমকে আমি রঙ এটা <EOS> <EOS> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার মনে হয টম ভালোই আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.0224
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 3 Iteration: 45
-    
-    SAMPLE TEXT:
-    i feel well <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আছি। আমি রাতরি আপনি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার ভাল লাগছে। <EOS> <PAD> 
-    
-    loss=4.53445
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 3 Iteration: 46
-    
-    SAMPLE TEXT:
-    i 'll take those <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তে এই বাডি। <EOS> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওইগলো নেবো। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.59797
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 3 Iteration: 47
-    
-    SAMPLE TEXT:
-    i 'm your friend <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এই হযনি। শিকষক <EOS> <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তোদের বনধ। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.89092
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 3 Iteration: 48
-    
-    SAMPLE TEXT:
-    tom is 100 % correct <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করেছে। এখনো <PAD> <EOS> <PAD> <PAD> <PAD> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম ১০০ % ঠিক। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.14616
-    
-    CHOSEN SAMPLE NO.: 38
-    
-    Epoch: 3 Iteration: 49
+    Epoch: 1 Iteration: 4
     
     SAMPLE TEXT:
     would you like to come fishing with us <EOS> <PAD> 
@@ -4101,575 +1477,665 @@ with tf.Session() as sess: # Start Tensorflow Session
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> করন। আছি। অকটোবরে <PAD> <PAD> <PAD> <PAD> <PAD> আছেন। <PAD> <PAD>
+    আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনি কি আমাদের সাথে মাছ ধরতে যাবেন <EOS> <PAD> <PAD> <PAD> <PAD> 
+    তমি কি আমাদের সাথে মাছ ধরতে যাবে <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.38031
+    loss=59.2156
     
-    CHOSEN SAMPLE NO.: 44
+    CHOSEN SAMPLE NO.: 38
     
-    Epoch: 3 Iteration: 50
+    Epoch: 1 Iteration: 5
     
     SAMPLE TEXT:
-    you did not understand <EOS> 
+    i 'm not at all tired <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    এখানে দোষ চাইছি। কখন <PAD> <PAD> <PAD>
+    আমরা আমরা আমরা আমরা আমরা আমরা আমরা আমরা টম টম
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনি বঝতে পারেন নি। <EOS> <PAD> <PAD> 
+    আমি একদমই কলানত নই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.05696
+    loss=39.9769
     
-    CHOSEN SAMPLE NO.: 39
+    CHOSEN SAMPLE NO.: 14
     
-    Epoch: 3 Iteration: 51
+    Epoch: 1 Iteration: 6
     
     SAMPLE TEXT:
-    i do not believe it <EOS> 
+    i believe tom is doing well <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    বসটনের পারি এর পারি ভাবছিলাম <PAD> <PAD> <PAD> না।
+    আপনার তমি আপনার কথা আপনার আপনার আপনার আপনার কি আপনার
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি এটা বিশবাস করতে পারছি না <EOS> <PAD> <PAD> 
+    আমার মনে হয টম ভালোই আছে। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.03759
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 4 Iteration: 1
-    
-    SAMPLE TEXT:
-    what station is it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনার ছিলাম ছিলো। <PAD> আটকাও। নাম <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটা কোন সটেশন <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.8935
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 4 Iteration: 2
-    
-    SAMPLE TEXT:
-    spanish is her native language <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খেযেছে টাকাটা করছি। লাগবে। <PAD> <PAD> <PAD> দিতে করতেই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সপযানিশ তার মাতভাষা। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.97828
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 4 Iteration: 3
-    
-    SAMPLE TEXT:
-    you are not going to get away with this tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ও আমি তার <PAD> কি <PAD> <PAD> <PAD> <PAD> করে <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম তমি এর থেকে পার পেযে যাবে না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.69896
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 4 Iteration: 4
-    
-    SAMPLE TEXT:
-    who is speaking <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম আপনি কি পডছে। তাই <EOS> ফরাসি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কে কথা বলছেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.45669
-    
-    CHOSEN SAMPLE NO.: 45
-    
-    Epoch: 4 Iteration: 5
-    
-    SAMPLE TEXT:
-    he got angry <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    গরতবপরণ ওটা যেতে <PAD> দেখেছো <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও রেগে গেছিলো। <EOS> <PAD> <PAD> 
-    
-    loss=3.80011
+    loss=15.8207
     
     CHOSEN SAMPLE NO.: 1
     
-    Epoch: 4 Iteration: 6
+    Epoch: 1 Iteration: 7
     
     SAMPLE TEXT:
-    may i open the windows <EOS> 
+    i teach english <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    কাশতে ওনার ৭ <EOS> <PAD> <PAD> <PAD> <PAD>
+    আমার <EOS> আমার <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি কি জানলাগলো খলতে পারি <EOS> <PAD> <PAD> 
+    আমি ইংরাজি পডাই। <EOS> <PAD> <PAD> 
     
-    loss=4.45367
+    loss=14.7499
     
-    CHOSEN SAMPLE NO.: 9
+    CHOSEN SAMPLE NO.: 13
     
-    Epoch: 4 Iteration: 7
+    Epoch: 1 Iteration: 8
     
     SAMPLE TEXT:
-    spanish is her native language <EOS> 
+    are you all ready <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    ভেতরে আপনার <EOS> <PAD> মাতাল <PAD> <PAD> <PAD> নাম
+    আমাকে সেই আছে না। আছে গত গত সেই
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    সপযানিশ তার মাতভাষা। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আপনারা সবাই তৈরী <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.02746
+    loss=7.61839
     
-    CHOSEN SAMPLE NO.: 8
+    CHOSEN SAMPLE NO.: 50
     
-    Epoch: 4 Iteration: 8
+    Epoch: 1 Iteration: 9
     
     SAMPLE TEXT:
-    tom started yelling <EOS> 
+    tom certainly is not as smart as mary thinks he is <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি তাইতো নিচে একট <EOS> <PAD>
+    আর আপনাকে মধযে জনয গানে খজে ভাষায একবার তোমাকে করা অনগরহ তাডাতাডি যাচছি। টমের আপনি <EOS> তোমাকে হবে।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম চিৎকার আরমভ করলো। <EOS> <PAD> 
+    টম অতটা বদধিমান নয যতটা মেরি মনে করে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.86933
+    loss=6.53
     
-    CHOSEN SAMPLE NO.: 23
+    CHOSEN SAMPLE NO.: 58
     
-    Epoch: 4 Iteration: 9
+    Epoch: 1 Iteration: 10
     
     SAMPLE TEXT:
-    show me <EOS> 
+    eat whatever food you like <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    জযাকসনদের আপনার দেখবো। <EOS> পাব
+    হচছে মা পেল। নোংরা বল বিভিনন আছে পার
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমাকে দেখান। <EOS> <PAD> <PAD> 
+    আপনার যে খাবার পছনদ হয সেটা খান। <EOS> 
     
-    loss=3.97496
+    loss=5.36857
     
-    CHOSEN SAMPLE NO.: 37
+    CHOSEN SAMPLE NO.: 7
     
-    Epoch: 4 Iteration: 10
+    Epoch: 1 Iteration: 11
     
     SAMPLE TEXT:
-    the rumor is not true <EOS> 
+    tom started coughing <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি টম নয। বাডিতে বঝতে <EOS> <PAD> <PAD>
+    ডাউনলোড অনধকারকে করে বডো তিকত
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    গজবটা সতযি নয। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    টম কাশতে শর করলো। <EOS> 
     
-    loss=4.19715
+    loss=6.17964
     
-    CHOSEN SAMPLE NO.: 52
+    CHOSEN SAMPLE NO.: 39
     
-    Epoch: 4 Iteration: 11
+    Epoch: 1 Iteration: 12
     
     SAMPLE TEXT:
-    i 've been hoping you would drop in <EOS> 
+    i have two nieces <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    রাখেন। টম আতবীযদের <EOS> থাকার <PAD> <PAD> <PAD> <PAD> <PAD> <EOS> <PAD>
+    ধরতে বডো থেকে পারছি বাজে টপিটা যাব। একজন
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি ভাবছিলাম আপনি এসে উপসথিত হবেন। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমার দটো ভাগনী আছে। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.50563
+    loss=4.67193
     
-    CHOSEN SAMPLE NO.: 53
+    CHOSEN SAMPLE NO.: 28
     
-    Epoch: 4 Iteration: 12
+    Epoch: 1 Iteration: 13
     
     SAMPLE TEXT:
-    forget him <EOS> 
+    he speaks french <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    পরণ নতন। <EOS> <PAD> <EOS>
+    আইন। mp3 ফরাসিতে যেতে শতর আমাদের
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তাকে ছাডো। <EOS> <PAD> <PAD> 
+    সে ফরাসিতে কথা বলে। <EOS> <PAD> 
     
-    loss=4.17571
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 4 Iteration: 13
-    
-    SAMPLE TEXT:
-    i feel well <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সঙগে টম অনযরকম। <PAD> করতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার ভাল লাগছে। <EOS> <PAD> 
-    
-    loss=4.26027
-    
-    CHOSEN SAMPLE NO.: 51
-    
-    Epoch: 4 Iteration: 14
-    
-    SAMPLE TEXT:
-    what time does this train reach yokohama <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কিছ কি ছিলেন <EOS> <EOS> <PAD> <PAD> <PAD> না। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টরেনটা কটার সময ইযোকোহামা পৌছায <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.78038
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 4 Iteration: 15
-    
-    SAMPLE TEXT:
-    yesterday was my seventeenth birthday <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি করলেন। <EOS> বযপারটা <EOS> <PAD> ঝামেলায <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    গতকাল আমার সতেরোতম জনমদিন ছিলো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.89854
-    
-    CHOSEN SAMPLE NO.: 42
-    
-    Epoch: 4 Iteration: 16
-    
-    SAMPLE TEXT:
-    you are always complaining <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরশনের পরতযেক কষেতরে <PAD> <PAD> বলতে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি সবসময অভিযোগ কর। <EOS> <PAD> <PAD> 
-    
-    loss=3.88641
+    loss=5.45646
     
     CHOSEN SAMPLE NO.: 11
     
-    Epoch: 4 Iteration: 17
+    Epoch: 1 Iteration: 14
     
     SAMPLE TEXT:
-    try hard <EOS> 
+    i made it myself <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    ফোন নিযম <EOS> টমের রাখো। <PAD>
+    বিকলপ। খোলামেলা। ওখানে পারি। গেছে। ভলবেন বসটনে করলো।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আরও চেষটা কর। <EOS> <PAD> <PAD> 
+    আমি এটা নিজে নিজে বানিযেছি। <EOS> <PAD> <PAD> 
     
-    loss=3.65279
+    loss=4.58858
+    
+    CHOSEN SAMPLE NO.: 28
+    
+    Epoch: 1 Iteration: 15
+    
+    SAMPLE TEXT:
+    i saw him running <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বারতাটা আপলোড আছেন করার হবে। এটাই ঘর পছনদ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ওনাকে দৌডাতে দেখেছিলাম। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.58135
+    
+    CHOSEN SAMPLE NO.: 50
+    
+    Epoch: 1 Iteration: 16
+    
+    SAMPLE TEXT:
+    tom certainly is eloquent <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    সতয। শেষের নাম ও মীমাংসাযোগয। চেচালো। চডানতভাবে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম সতযি বাকযবাগীশ। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.80474
+    
+    CHOSEN SAMPLE NO.: 46
+    
+    Epoch: 1 Iteration: 17
+    
+    SAMPLE TEXT:
+    we lost <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    চাও ভরকটি কাচা খেলতাম। সমভাবনা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমরা হেরে গেছি। <EOS> <PAD> 
+    
+    loss=5.18577
+    
+    CHOSEN SAMPLE NO.: 11
+    
+    Epoch: 1 Iteration: 18
+    
+    SAMPLE TEXT:
+    i 'd like to check out tomorrow morning <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    আমি উনি হবে। বাডিটাকে সঠিক। আছে পারে। ছিলাম। বাডিটাকে আমি দেখতে মারলো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি কাল সকালে ঘরটা ছেরে দিতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.59181
+    
+    CHOSEN SAMPLE NO.: 23
+    
+    Epoch: 1 Iteration: 19
+    
+    SAMPLE TEXT:
+    you look sick <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    থেকেই কমান। দিন। সে টম বসটনে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনাকে অসসথ বলে মনে হচছে। <EOS> 
+    
+    loss=4.68394
+    
+    CHOSEN SAMPLE NO.: 24
+    
+    Epoch: 1 Iteration: 20
+    
+    SAMPLE TEXT:
+    i give you my word <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    করলো। বঝতে এক ভালোবাসে। গরতবপরণ। বযরথ পডল। পালটে আমাকে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি তোমাকে কথা দিলাম। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.33229
+    
+    CHOSEN SAMPLE NO.: 53
+    
+    Epoch: 1 Iteration: 21
+    
+    SAMPLE TEXT:
+    keep quiet <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ছটির ওকে পারবেন বেডাতে টেপ এনো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    চপ করো <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.41801
+    
+    CHOSEN SAMPLE NO.: 46
+    
+    Epoch: 1 Iteration: 22
+    
+    SAMPLE TEXT:
+    what team does tom play for <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    অসবিধা যাক। থাকাটাও বষটি জিরোচছি। শানত আমাকে তেষটা বডো
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম কোন দলের হযে খেলে <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=5.15387
+    
+    CHOSEN SAMPLE NO.: 57
+    
+    Epoch: 1 Iteration: 23
+    
+    SAMPLE TEXT:
+    tom now knows everything <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ঘরটা আমি ভাষা ঠিক কাজ পারব বসো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম এখন সবকিছই জানে। <EOS> <PAD> <PAD> 
+    
+    loss=4.64027
     
     CHOSEN SAMPLE NO.: 25
     
-    Epoch: 4 Iteration: 18
+    Epoch: 1 Iteration: 24
     
     SAMPLE TEXT:
-    tom seemed happy to see you <EOS> 
+    you ought to ask him for advice <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    উপর সে বললাম। <PAD> <PAD> <PAD> <PAD> <PAD> কথা
+    আমার কি খব পরেছিস দিন। খায সেটা তমি আমরা আমার করছে।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম আপনাকে দেখে খশি বলে মনে হচচে। <EOS> <PAD> 
+    তোমার তাকে পরামরশের জনয জিজঞাসা করা উচিৎ। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.7744
+    loss=4.74578
     
-    CHOSEN SAMPLE NO.: 22
+    CHOSEN SAMPLE NO.: 57
     
-    Epoch: 4 Iteration: 19
+    Epoch: 1 Iteration: 25
     
     SAMPLE TEXT:
-    my mother loves music <EOS> 
+    the baby is screaming <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    বাডিতে ভিজে যাই। করেন। <PAD> রাখতে <PAD> পারে।
+    তোদের এসেছিলো। বাজে। পালটিও আটটার একবার দিশেহারা
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমার মাযের সঙগীত ভাল লাগে। <EOS> <PAD> <PAD> 
+    বাচচাটা চেচাচছে। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.53462
+    loss=4.48393
     
-    CHOSEN SAMPLE NO.: 18
+    CHOSEN SAMPLE NO.: 46
     
-    Epoch: 4 Iteration: 20
+    Epoch: 1 Iteration: 26
     
     SAMPLE TEXT:
-    control yourself <EOS> 
+    tom has decided to keep a diary <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি সঙগেই বলব। হোল। <PAD> <EOS>
+    ওনার যেত আপনি নিরবাচিত বযসত। টম পেছনে কি নিযে ফরাসি সতরী।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    নিজেকে সংজত করো। <EOS> <PAD> <PAD> 
+    টম একটা ডাইরি রাখার কথা ঠিক করেছে। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.5218
+    loss=4.51531
     
-    CHOSEN SAMPLE NO.: 37
+    CHOSEN SAMPLE NO.: 28
     
-    Epoch: 4 Iteration: 21
+    Epoch: 1 Iteration: 27
     
     SAMPLE TEXT:
-    i like yellow <EOS> 
+    i drink beer <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    খাচছিল। যাবেন <EOS> <EOS> খেতে <PAD> <PAD>
+    এই উচিৎ। কি ধনী। বাডিতে শোনো। না।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমার হলদ রঙ পছনদ। <EOS> <PAD> <PAD> 
+    আমি বিযার খাই। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.50285
+    loss=3.85868
     
-    CHOSEN SAMPLE NO.: 6
+    CHOSEN SAMPLE NO.: 42
     
-    Epoch: 4 Iteration: 22
+    Epoch: 1 Iteration: 28
     
     SAMPLE TEXT:
-    i 'll call first <EOS> 
+    sit down <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমরা মডতে <EOS> <PAD> <PAD> <PAD> <PAD> না।
+    থেকে আমার আমি না। আমি
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি আগে ফোন করবো। <EOS> <PAD> <PAD> <PAD> 
+    বসো <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.46628
+    loss=4.48524
     
-    CHOSEN SAMPLE NO.: 37
+    CHOSEN SAMPLE NO.: 13
     
-    Epoch: 4 Iteration: 23
+    Epoch: 1 Iteration: 29
     
     SAMPLE TEXT:
-    tom does not want to see you <EOS> 
+    tom used to play guitar <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    টম উততর ইংরাজি <PAD> <PAD> <PAD> যে <PAD> <PAD> <PAD>
+    পাযনি। সমভব চকোলেট পডলো এটা আমি আরমভ ঠিক পেলো
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম তোমার সঙগে দেখা করতে চায না। <EOS> <PAD> <PAD> 
+    টম গীটার বাজাতো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.8996
+    loss=4.00684
     
-    CHOSEN SAMPLE NO.: 61
+    CHOSEN SAMPLE NO.: 3
     
-    Epoch: 4 Iteration: 24
+    Epoch: 1 Iteration: 30
     
     SAMPLE TEXT:
-    i 'm your friend <EOS> 
+    you may swim <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    থাকলো। বাডিতে তিনি <EOS> <EOS> <PAD> <PAD> <PAD>
+    দিযেছে। কে দেখে আপনি সপারিশ ফরাসি
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি তোদের বনধ। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    সাতার কাটতে পারেন। <EOS> <PAD> <PAD> 
     
-    loss=3.52805
+    loss=3.85715
     
-    CHOSEN SAMPLE NO.: 26
+    CHOSEN SAMPLE NO.: 43
     
-    Epoch: 4 Iteration: 25
+    Epoch: 1 Iteration: 31
     
     SAMPLE TEXT:
-    are you sure <EOS> <PAD> 
+    do you live in this neighborhood <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    নীচে তমি কাল <PAD> <PAD> <PAD>
+    চেষটা আমি উনি টম সঙগে ভাষায ফোন বনধ কী
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তমি নিশচিত তো <EOS> <PAD> <PAD> 
+    তমি কি এই পাডাতেই থাকো <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.99342
+    loss=4.90109
     
-    CHOSEN SAMPLE NO.: 6
+    CHOSEN SAMPLE NO.: 54
     
-    Epoch: 4 Iteration: 26
+    Epoch: 1 Iteration: 32
     
     SAMPLE TEXT:
-    do you know a good dentist <EOS> 
+    take tom to the hospital <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আসতে আমি বলেনি <PAD> <EOS> <EOS> সেটা <PAD> <PAD>
+    কেযার গরবিত রাখব। পছনদ। পারে। ধান উদবিগন বলন। চাবি
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তমি কি কোনো ভালো দাতের ডাকতারকে চেনো <EOS> <PAD> 
+    টমকে হাসপাতালে নিযে যাও। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.52117
+    loss=4.01311
     
-    CHOSEN SAMPLE NO.: 34
+    CHOSEN SAMPLE NO.: 47
     
-    Epoch: 4 Iteration: 27
+    Epoch: 1 Iteration: 33
     
     SAMPLE TEXT:
-    are those yours <EOS> 
+    may i have your phone number <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    তাহলে আমি ঘডিটার ফল <PAD> <PAD> <PAD>
+    সকতলা আকরষণীয সামলাতে গরতবপরণ হযে যা আমার জতো উনি না
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    সেইগলো কি তোমার <EOS> <PAD> <PAD> <PAD> 
+    আমি কি আপনার ফোন নামবারটি পেতে পারি <EOS> <PAD> <PAD> 
     
-    loss=3.51858
+    loss=4.25953
     
-    CHOSEN SAMPLE NO.: 6
+    CHOSEN SAMPLE NO.: 21
     
-    Epoch: 4 Iteration: 28
+    Epoch: 1 Iteration: 34
     
     SAMPLE TEXT:
-    how much did you eat <EOS> 
+    do you understand what i 'm saying <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    না। আপনারা ছাডবে সাথে সটপ টমের <PAD> <PAD>
+    <EOS> <EOS> আমার <EOS> <EOS> <EOS> বাইকটা এই দেবো। এই
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তমি কতটা খেযেছো <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আমি যা বলছি আপনি কি তা বঝতে পারছেন <EOS> <PAD> 
     
-    loss=3.7123
+    loss=4.64283
     
-    CHOSEN SAMPLE NO.: 48
+    CHOSEN SAMPLE NO.: 53
     
-    Epoch: 4 Iteration: 29
+    Epoch: 1 Iteration: 35
     
     SAMPLE TEXT:
-    you deserve the prize <EOS> 
+    do you live here <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    বিষয সবসময মত <EOS> <EOS> <PAD> <PAD> <PAD>
+    করতে পারেন। কোথায <EOS> সি তারা না। এটা
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনি এই পরষকারটির যোগয। <EOS> <PAD> <PAD> <PAD> 
+    আপনি কি এখানে থাকেন <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.41044
+    loss=3.70672
+    
+    CHOSEN SAMPLE NO.: 27
+    
+    Epoch: 1 Iteration: 36
+    
+    SAMPLE TEXT:
+    that is because you are a girl <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    সে নই। বোন। আমরা দিলাম। বলে ফরাসিতে আমি চাই হচচে। গেছে কোথা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তার কারণ তই একজন মেযে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.65005
+    
+    CHOSEN SAMPLE NO.: 58
+    
+    Epoch: 1 Iteration: 37
+    
+    SAMPLE TEXT:
+    tom rides a scooter <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    থেকে এটা কফি কত ঠিকমতো তিনি আমাকে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম সকটার চডে। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.16478
+    
+    CHOSEN SAMPLE NO.: 11
+    
+    Epoch: 1 Iteration: 38
+    
+    SAMPLE TEXT:
+    i came back <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বসটনে পডাতে সাথে এসেছিলো। পারব দাতের
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ফিরে এলাম। <EOS> <PAD> <PAD> 
+    
+    loss=3.98497
     
     CHOSEN SAMPLE NO.: 0
     
-    Epoch: 4 Iteration: 30
+    Epoch: 1 Iteration: 39
+    
+    SAMPLE TEXT:
+    how are you did you have a good trip <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বযসত। পারি খশি <EOS> ওনাকে বাকযাংশটির খাচছেন। <EOS> দযা আমার সহজেই বরফ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কেমন আছেন যাতরা ভালো ছিল তো <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=5.24832
+    
+    CHOSEN SAMPLE NO.: 46
+    
+    Epoch: 1 Iteration: 40
+    
+    SAMPLE TEXT:
+    do not cry <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    হাসলো সাবধানে খলন লাল অংশে ওই খেযেছো
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কেদো না। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.94055
+    
+    CHOSEN SAMPLE NO.: 19
+    
+    Epoch: 1 Iteration: 41
     
     SAMPLE TEXT:
     she is asking how that is possible <EOS> 
@@ -4677,1061 +2143,71 @@ with tf.Session() as sess: # Start Tensorflow Session
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    টম শীত পরামরশের শর <PAD> <PAD> <EOS> <PAD> <PAD> <PAD> <EOS>
+    কাশতে সকতলা দেখেছি। পারবেন বানাতে কোথা করন যেতে সংজত দৌডান। মনোযোগ
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    ইনি জিজঞাসা করছেন এটা কি করে সমভব। <EOS> <PAD> <PAD> <PAD> 
+    উনি জিজঞাসা করছেন এটা কি করে সমভব। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.43086
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 4 Iteration: 31
-    
-    SAMPLE TEXT:
-    could you repeat that please <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ওনারা সে সাহাযয থাকা <EOS> <PAD> <PAD> সতযি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি অনগরহ করে আর একবার বলতে পারবেন <EOS> 
-    
-    loss=3.69709
-    
-    CHOSEN SAMPLE NO.: 30
-    
-    Epoch: 4 Iteration: 32
-    
-    SAMPLE TEXT:
-    i only speak french at home with my parents <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থাকলো। একবার বলবেন ভাল বলতে <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বাডিতে মা বাবার সঙগে খালি ফরাসিতে কথা বলি। <EOS> <PAD> <PAD> 
-    
-    loss=5.15136
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 4 Iteration: 33
-    
-    SAMPLE TEXT:
-    do not leave me alone <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমের টম বারবার <EOS> <PAD> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাকে একলা ছেডে যাবেন না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.83849
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 4 Iteration: 34
-    
-    SAMPLE TEXT:
-    i do not agree with him <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পলিশ খশি। করে ঠিক না। সাহাযয করে শর <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওনার সাথে একমত নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.99498
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 4 Iteration: 35
-    
-    SAMPLE TEXT:
-    i 'm getting off at the next stop <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যাওযার ওদের ভাজ ভবিষযতে <EOS> <PAD> <PAD> <PAD> <PAD> আরমভ <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি পরের সটপে নেবে যাব। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.24719
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 4 Iteration: 36
-    
-    SAMPLE TEXT:
-    is there a discount for children <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ও চিৎকার জানেন <PAD> জনযে <PAD> <PAD> করতে <PAD> করছি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাচচাদের জনয কোনো ছাড আছে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.08106
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 4 Iteration: 37
-    
-    SAMPLE TEXT:
-    tom saw you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম। টম পরতযেক বলতে রাখো। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আপনাকে দেখলো। <EOS> <PAD> <PAD> 
-    
-    loss=4.16876
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 4 Iteration: 38
-    
-    SAMPLE TEXT:
-    close the door when you leave <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরযনত টম থাকলাম। <EOS> বনধ <PAD> <PAD> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বেডোবার সময দরজাটা বনধ করে দেবেন। <EOS> <PAD> <PAD> 
-    
-    loss=4.19795
+    loss=4.07073
     
     CHOSEN SAMPLE NO.: 44
     
-    Epoch: 4 Iteration: 39
+    Epoch: 1 Iteration: 42
     
     SAMPLE TEXT:
-    i 'm a student <EOS> 
+    tom knew <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি নেই। পারবেন কিছ <PAD> <EOS> এটা
+    ওটা <EOS> থেকে চেচালো। যা টম
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি একজন ছাতরী। <EOS> <PAD> <PAD> <PAD> 
+    টম জানতো। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.90148
+    loss=3.41441
+    
+    CHOSEN SAMPLE NO.: 63
+    
+    Epoch: 1 Iteration: 43
+    
+    SAMPLE TEXT:
+    tom laughed <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    আমার বলতে আমি <EOS> কি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম হাসলো। <EOS> <PAD> <PAD> 
+    
+    loss=4.00027
+    
+    CHOSEN SAMPLE NO.: 27
+    
+    Epoch: 1 Iteration: 44
+    
+    SAMPLE TEXT:
+    eat anything you like <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    রাখতে খান মেরি <EOS> আর হাটে। <EOS> চিৎকার
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনার যা কিছ পছনদ হয তাই খান। <EOS> 
+    
+    loss=3.86403
     
     CHOSEN SAMPLE NO.: 19
     
-    Epoch: 4 Iteration: 40
-    
-    SAMPLE TEXT:
-    i 'll arrange it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাইরে চিৎকার গেলো। <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি সেটা বযবসথা করে দেবো। <EOS> <PAD> 
-    
-    loss=3.898
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 4 Iteration: 41
-    
-    SAMPLE TEXT:
-    do you understand what i mean <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি কি খব <EOS> হযে <PAD> <PAD> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি যা বলতে চাইছি তমি কি তা বঝতে পারছো <EOS> <PAD> 
-    
-    loss=4.21859
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 4 Iteration: 42
-    
-    SAMPLE TEXT:
-    tom likes chocolate cake a lot <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনি জমা ভাষা লাগছে। করে <PAD> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম চকলেট কেক খব পছনদ করে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.97226
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 4 Iteration: 43
-    
-    SAMPLE TEXT:
-    can i change the channel <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যান। নিযে <EOS> শনলাম। <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কি চযানেলটা পালটাতে পারি <EOS> <PAD> <PAD> 
-    
-    loss=3.9458
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 4 Iteration: 44
-    
-    SAMPLE TEXT:
-    i am not a doctor but a teacher <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম কি ভবিষযতে পারি <PAD> <PAD> <PAD> <PAD> <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ডকতার নই আমি শিকষক। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.04899
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 4 Iteration: 45
-    
-    SAMPLE TEXT:
-    that is my brother <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম টেনিস নিযে চিনলে খান <PAD> এনো। <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটা আমার ভাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.57186
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 4 Iteration: 46
-    
-    SAMPLE TEXT:
-    they screamed <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সতযিই ধরে দাদা রাখার বাচচা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তারা চিৎকার করলেন। <EOS> <PAD> 
-    
-    loss=4.99665
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 4 Iteration: 47
-    
-    SAMPLE TEXT:
-    i have an old computer that i do not want anymore <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম কিছ হেটে আই বযাঙকে <PAD> <EOS> <PAD> <PAD> পেযেছি। <PAD> <PAD> <PAD> না। <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার একটা পরানো কমপিউটার আছে যেটার আমার আর কোনো পরযোজন নেই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.10239
-    
-    CHOSEN SAMPLE NO.: 45
-    
-    Epoch: 4 Iteration: 48
-    
-    SAMPLE TEXT:
-    who was it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটার মনে নিশবাস দোষ টেবিল <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কে ছিলো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.93889
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 4 Iteration: 49
-    
-    SAMPLE TEXT:
-    i will not lie <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাডিতেই দৌডান। ধারমিক। না। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি মিথযা বলবো না। <EOS> <PAD> <PAD> 
-    
-    loss=3.84506
-    
-    CHOSEN SAMPLE NO.: 20
-    
-    Epoch: 4 Iteration: 50
-    
-    SAMPLE TEXT:
-    i 'm inside <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার সঙগে কাপরগলো হয <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ভেতরে আছি। <EOS> <PAD> <PAD> 
-    
-    loss=3.62606
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 4 Iteration: 51
-    
-    SAMPLE TEXT:
-    just a minute <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নিন একসাথে <PAD> গেছি। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এক মিনিট। <EOS> <PAD> <PAD> 
-    
-    loss=4.31503
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 5 Iteration: 1
-    
-    SAMPLE TEXT:
-    let us go <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখানে কি টাকা <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    যাওযা যাক <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.7096
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 5 Iteration: 2
-    
-    SAMPLE TEXT:
-    i hear you have friends in the cia <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কষমা যা গান <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি শনলাম আপনার নাকি সি আই এ তে কিছ বনধ আছে। <EOS> 
-    
-    loss=4.61973
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 5 Iteration: 3
-    
-    SAMPLE TEXT:
-    good evening <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খব <EOS> <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    শভ সনধযা। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.56113
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 5 Iteration: 4
-    
-    SAMPLE TEXT:
-    she folded her handkerchief neatly <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি <EOS> <EOS> <EOS> <EOS> খশি <PAD> <PAD> না।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও ওর রমালটা পরিপাটি করে ভাজ করলো। <EOS> <PAD> 
-    
-    loss=4.05324
-    
-    CHOSEN SAMPLE NO.: 16
-    
-    Epoch: 5 Iteration: 5
-    
-    SAMPLE TEXT:
-    do not underestimate us <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি আপনার পাগল দেখেছেন <PAD> <PAD> <EOS> সনধযেতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাদেরকে কোন অংশে কম মনে করবেন না। <EOS> 
-    
-    loss=3.48413
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 5 Iteration: 6
-    
-    SAMPLE TEXT:
-    stay there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পাশে। আমি অরথহীন। খাও। না <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওখানেই থাকো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.43192
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 5 Iteration: 7
-    
-    SAMPLE TEXT:
-    tom frowned <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি গাডি উপর <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম ভর কোচকালো। <EOS> <PAD> 
-    
-    loss=3.85635
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 5 Iteration: 8
-    
-    SAMPLE TEXT:
-    my arm hurts <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নই। পরায ডাকতার। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার হাত বযাথা করছে। <EOS> <PAD> 
-    
-    loss=3.75832
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 5 Iteration: 9
-    
-    SAMPLE TEXT:
-    he can speak japanese <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কাটতে আমি ফেলেছি। <EOS> <PAD> <PAD> চেচালেন।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে জাপানি বলতে পারে। <EOS> <PAD> <PAD> 
-    
-    loss=3.70636
-    
-    CHOSEN SAMPLE NO.: 51
-    
-    Epoch: 5 Iteration: 10
-    
-    SAMPLE TEXT:
-    i want to be more independent <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আবার ওখানে কাটতে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আরও সবাধীন হতে চাই। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.7115
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 5 Iteration: 11
-    
-    SAMPLE TEXT:
-    do you understand me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আছে। টম তা <EOS> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি আমার কথা বঝতে পারছ <EOS> <PAD> 
-    
-    loss=3.44831
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 5 Iteration: 12
-    
-    SAMPLE TEXT:
-    i know tom is tired <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বলতে টম <EOS> খেতে <EOS> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি জানি টম কলানত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.07783
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 5 Iteration: 13
-    
-    SAMPLE TEXT:
-    my mother does not speak english <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তারাতারি কিছই না। এখানে <PAD> <PAD> <PAD> সঙগে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার মা ইংরাজি বলতে পারে না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.97175
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 5 Iteration: 14
-    
-    SAMPLE TEXT:
-    i found my mother busy ironing out some shirts <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চিৎকার একটা করে আছে। <EOS> <PAD> <PAD> পেযেছিলাম। <PAD> <EOS> হোক। <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি দেখলাম যে আমার মা কিছ জামা ইসতিরি করতে বযাসত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.93717
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 5 Iteration: 15
-    
-    SAMPLE TEXT:
-    let us go <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ডাকো নিহত আমি <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    যাওযা যাক। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.36426
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 5 Iteration: 16
-    
-    SAMPLE TEXT:
-    you must take this cough syrup <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনারা অভযসত। কারা শনছে। দেখলো। লাগে <PAD> হারিযেছিলেন। <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনাকে অতি অবশযই এই কাশির সিরাপটা খেতে হবে। <EOS> <PAD> 
-    
-    loss=3.96931
-    
-    CHOSEN SAMPLE NO.: 62
-    
-    Epoch: 5 Iteration: 17
-    
-    SAMPLE TEXT:
-    try it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখন মাথা কেউ <PAD> <EOS> রাখতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    চেখে দেখো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.1625
-    
-    CHOSEN SAMPLE NO.: 23
-    
-    Epoch: 5 Iteration: 18
-    
-    SAMPLE TEXT:
-    what does your son do <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি চেচানো আননদ যাও। করো। <PAD> মধযের <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার ছেলে কি করে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.67302
-    
-    CHOSEN SAMPLE NO.: 15
-    
-    Epoch: 5 Iteration: 19
-    
-    SAMPLE TEXT:
-    tom always keeps his promises <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম আমরা পারো একমাতর <PAD> <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম সবসময ওনার কথা রাখেন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.76166
-    
-    CHOSEN SAMPLE NO.: 30
-    
-    Epoch: 5 Iteration: 20
-    
-    SAMPLE TEXT:
-    i 'm sorry but it is impossible <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করো। টম কিছ তো <EOS> <PAD> <PAD> গেছে। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমায কষমা কোর কিনত এটা সমভব নয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.29921
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 5 Iteration: 21
-    
-    SAMPLE TEXT:
-    where was your daughter <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি যা বিযে <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার মেযে কোথায ছিলো <EOS> <PAD> <PAD> 
-    
-    loss=3.73
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 5 Iteration: 22
-    
-    SAMPLE TEXT:
-    i 'm not jealous <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ভাবে টম এটা থাকছে। <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ঈরষাপরাযণ নই। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.71536
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 5 Iteration: 23
-    
-    SAMPLE TEXT:
-    i can read <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খাও। তাডাতাডি ওযাশিংটন <EOS> করতে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি পডতে পারি। <EOS> <PAD> <PAD> 
-    
-    loss=3.71131
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 5 Iteration: 24
-    
-    SAMPLE TEXT:
-    i never listen to tom anyway <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিলো আমি সতয। কত <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এমনিতেও কখনও টমের কথা শনি না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.05847
-    
-    CHOSEN SAMPLE NO.: 56
-    
-    Epoch: 5 Iteration: 25
-    
-    SAMPLE TEXT:
-    i 'm not very patient <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    জিতেছে। একজন শবদ থেকে <PAD> <EOS> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি খব একটা ধৈরযশীল নই। <EOS> <PAD> <PAD> 
-    
-    loss=4.24794
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 5 Iteration: 26
-    
-    SAMPLE TEXT:
-    do you understand what he is saying <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি পডাশোনা <PAD> <PAD> <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও যা বলছে তমি কি তা বঝতে পারছো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.88211
-    
-    CHOSEN SAMPLE NO.: 17
-    
-    Epoch: 5 Iteration: 27
-    
-    SAMPLE TEXT:
-    close that door <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমরা এখন অরথ <EOS> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওই দরজাটা বনধ করো। <EOS> <PAD> <PAD> 
-    
-    loss=3.37673
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 5 Iteration: 28
-    
-    SAMPLE TEXT:
-    i was astonished <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    একমত। ওর মরিযা করছেন। <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বিসমিত হযে গেছিলাম। <EOS> <PAD> <PAD> 
-    
-    loss=3.50304
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 5 Iteration: 29
-    
-    SAMPLE TEXT:
-    where is the boarding gate for ua 111 <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ধরতে ইতালীযতে ঝগডা ভাষায <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ua 111 তে ওঠার দরজাটা কোথায <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.07333
-    
-    CHOSEN SAMPLE NO.: 2
-    
-    Epoch: 5 Iteration: 30
-    
-    SAMPLE TEXT:
-    what does your son do <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চিৎকার <PAD> পরশনের <PAD> <PAD> করা <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার ছেলে কি করে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.21765
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 5 Iteration: 31
-    
-    SAMPLE TEXT:
-    they say this old house is haunted <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার ওখানে হবে। খেতে <PAD> কাদছে। <PAD> <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সবাই বলে যে এই পরানো বাডিটায ভত আছে। <EOS> <PAD> <PAD> 
-    
-    loss=4.22835
-    
-    CHOSEN SAMPLE NO.: 34
-    
-    Epoch: 5 Iteration: 32
-    
-    SAMPLE TEXT:
-    would you like to come <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার আমাদের ঠিকঠাক উপর <PAD> পছনদ <PAD> থাকবি <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি আসতে চাও <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.77764
-    
-    CHOSEN SAMPLE NO.: 45
-    
-    Epoch: 5 Iteration: 33
-    
-    SAMPLE TEXT:
-    is tom here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমরা কি আটটা পডা না
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কি এখানে আছে <EOS> 
-    
-    loss=4.65077
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 5 Iteration: 34
-    
-    SAMPLE TEXT:
-    you fainted <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি তমি বাডি। দাও। বই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি অজঞান হযে গেছিলেন। <EOS> 
-    
-    loss=4.5705
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 5 Iteration: 35
-    
-    SAMPLE TEXT:
-    you can eat anything you want <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি যাক। চম গেলো। নই। <PAD> পারবে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার যেটা ইচছে হয সেটা খেতে পারো। <EOS> <PAD> 
-    
-    loss=4.55468
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 5 Iteration: 36
-    
-    SAMPLE TEXT:
-    is this your book <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনার ওরা বলবে। <EOS> <EOS> বলতে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটা কি আপনার বই <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.42308
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 5 Iteration: 37
-    
-    SAMPLE TEXT:
-    keep tom there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ফরাসি আমি <EOS> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমকে ওখানেই রাখন। <EOS> <PAD> 
-    
-    loss=4.16807
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 5 Iteration: 38
+    Epoch: 1 Iteration: 45
     
     SAMPLE TEXT:
     close the door when you leave <EOS> 
@@ -5739,125 +2215,881 @@ with tf.Session() as sess: # Start Tensorflow Session
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    পছনদ করবে <EOS> <PAD> <PAD> <EOS> <PAD> <EOS> <PAD>
+    কাদছিলো। রহসয বল বলতে তোমার কষমাপরারথনা দাও। খান আমরা
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    বেডোবার সময দরজাটা বনধ করে দেবেন। <EOS> <PAD> <PAD> 
+    বেডোবার সময দরজাটা বনধ করে দিও। <EOS> <PAD> <PAD> 
     
-    loss=4.46699
+    loss=4.40852
     
-    CHOSEN SAMPLE NO.: 43
+    CHOSEN SAMPLE NO.: 41
     
-    Epoch: 5 Iteration: 39
+    Epoch: 1 Iteration: 46
     
     SAMPLE TEXT:
-    do not underestimate me <EOS> 
+    did you read it all <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    খেলি। শর থেকে <PAD> <EOS> <PAD> <PAD> <PAD>
+    বঝি। পডন। ছাডন। ওদের আছো আছো এমনিতে খেলি।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমাকে কোন অংশে কম মনে কোরো না। <EOS> 
+    তমি কি পরোটা পরেছো <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.36823
+    loss=4.93985
     
-    CHOSEN SAMPLE NO.: 22
+    CHOSEN SAMPLE NO.: 0
     
-    Epoch: 5 Iteration: 40
+    Epoch: 1 Iteration: 47
     
     SAMPLE TEXT:
-    tom was humiliated by mary <EOS> 
+    listen carefully <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি ওই <PAD> করে। <PAD> <PAD> <PAD> <PAD> <PAD>
+    বাডিটা ও <EOS> ভালো এটা বলেছিল
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম মেরি দবারা অপদসত হযেছিলো। <EOS> <PAD> <PAD> <PAD> 
+    মন দিযে শনবে। <EOS> <PAD> <PAD> 
     
-    loss=3.76962
+    loss=3.44873
     
     CHOSEN SAMPLE NO.: 58
     
-    Epoch: 5 Iteration: 41
+    Epoch: 1 Iteration: 48
     
     SAMPLE TEXT:
-    i 'm a free man <EOS> <PAD> 
+    tom has won many races <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    পার। যা মাতভাষা। লকষণ। <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
+    <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> টম
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি একজন সবাধিন মানষ। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    টম অনেক দৌড জিতেছে। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.17471
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 5 Iteration: 42
-    
-    SAMPLE TEXT:
-    puzzles are fun <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমকে পাচছি জিজঞাসা <EOS> <PAD> ফেল।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ধাধা মজার জিনিস। <EOS> <PAD> <PAD> 
-    
-    loss=3.70663
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 5 Iteration: 43
-    
-    SAMPLE TEXT:
-    can we keep it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    উপেকষা এই ভাল <PAD> <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা কি এটা রাখতে পারি <EOS> <PAD> <PAD> 
-    
-    loss=3.4329
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 5 Iteration: 44
-    
-    SAMPLE TEXT:
-    tom seldom eats at home <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটা বনধ আমি <EOS> <EOS> <PAD> <PAD> বঝি ভাজ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কমই বাডিতে খায। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.83508
+    loss=4.87674
     
     CHOSEN SAMPLE NO.: 4
     
-    Epoch: 5 Iteration: 45
+    Epoch: 1 Iteration: 49
+    
+    SAMPLE TEXT:
+    call the police <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> সবাই তারা <EOS> ভলে বোঝে সেটা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    পলিশ ডাকো <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.42726
+    
+    CHOSEN SAMPLE NO.: 20
+    
+    Epoch: 1 Iteration: 50
+    
+    SAMPLE TEXT:
+    this is not important <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    থাকতে চান ঘোডায কাল বিবাহবিচছেদ পারে। সতরী। খাবো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এটি গরতবপরণ না। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.79798
+    
+    CHOSEN SAMPLE NO.: 15
+    
+    Epoch: 1 Iteration: 51
+    
+    SAMPLE TEXT:
+    i would like to be a pilot in the future <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    যান। আমরা অংশে গেছিলাম। গাছটা এখন পারছি দাডাও। আমি করো। কিনলাম। ভেবছিলাম আমি ইনি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ভবিষযতে পাইলট হতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.60735
+    
+    CHOSEN SAMPLE NO.: 18
+    
+    Epoch: 2 Iteration: 1
+    
+    SAMPLE TEXT:
+    you should apologize <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    কেমন কর। দেখবো। গেছি ছিলে গেছিলো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনার কষমা চাওযা উচিৎ। <EOS> <PAD> 
+    
+    loss=3.6305
+    
+    CHOSEN SAMPLE NO.: 50
+    
+    Epoch: 2 Iteration: 2
+    
+    SAMPLE TEXT:
+    you called <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ধরন। কী জাপানি সে সবাই
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তমি ডেকেছিলে <EOS> <PAD> <PAD> 
+    
+    loss=3.72863
+    
+    CHOSEN SAMPLE NO.: 34
+    
+    Epoch: 2 Iteration: 3
+    
+    SAMPLE TEXT:
+    i saw mary sitting in front of a mirror brushing her hair <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> <EOS> <EOS> <EOS> তিনি <EOS> <EOS> <EOS> <EOS> <EOS> তোমরা ভালো <EOS> <EOS> <EOS> কর। <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    মেরিকে আযনার সামনে বসে চল আচডাতে দেখলাম। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=6.1713
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 2 Iteration: 4
+    
+    SAMPLE TEXT:
+    i was alone <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    দেখে <EOS> টম অকটোবর। কেউ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি একা ছিলাম। <EOS> <PAD> 
+    
+    loss=4.39774
+    
+    CHOSEN SAMPLE NO.: 46
+    
+    Epoch: 2 Iteration: 5
+    
+    SAMPLE TEXT:
+    take us there <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টম উপনযাস খায ওটা মানষ। আপনার মগ।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমাদের ওখানে নিযে চলো। <EOS> <PAD> <PAD> 
+    
+    loss=3.59155
+    
+    CHOSEN SAMPLE NO.: 31
+    
+    Epoch: 2 Iteration: 6
+    
+    SAMPLE TEXT:
+    i just want tom to be happy <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    এখানে। গেছিলাম। আছেন। টম <EOS> ওনারা চাইছি কটার পারো কিনতে তোমরা মেযে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি খালি চাই টম সখে থাকক। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.63375
+    
+    CHOSEN SAMPLE NO.: 47
+    
+    Epoch: 2 Iteration: 7
+    
+    SAMPLE TEXT:
+    i would like an air-conditioned room <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বারতাটা <EOS> <EOS> না। না। আসন। চেডে সকালে <EOS> টম যাচছি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমার একটী শীততাপ নিযনতরিত ঘর চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.81769
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 2 Iteration: 8
+    
+    SAMPLE TEXT:
+    i would like you to come with me <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    দেখো। চাই। রাখন। টমের শনিনি। চপ না। অনেক গেলো। পারি আগে যাবেন
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি চাই তমি আমার সাথে আসো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.25251
+    
+    CHOSEN SAMPLE NO.: 48
+    
+    Epoch: 2 Iteration: 9
+    
+    SAMPLE TEXT:
+    see above <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    একবার। <EOS> যান। এটা এটি ছিলো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    উপরে দেখন। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.36901
+    
+    CHOSEN SAMPLE NO.: 5
+    
+    Epoch: 2 Iteration: 10
+    
+    SAMPLE TEXT:
+    i 'm still your friend <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    যাক। থেকে পরতযেকদিন একটা ছোট। পেযেছিলাম। সে এখানে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি এখনো আপনার বনধ আছি। <EOS> <PAD> <PAD> 
+    
+    loss=3.68839
+    
+    CHOSEN SAMPLE NO.: 24
+    
+    Epoch: 2 Iteration: 11
+    
+    SAMPLE TEXT:
+    just staying alive in these times is hard enough <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    না। ওর পারবে দরকার। <EOS> দিলাম। না। নিরবোধ। টম যাবেন। করি। কর।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এখনকার সময শধ বেচে থাকাটাও যথেষট কঠিন। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.53596
+    
+    CHOSEN SAMPLE NO.: 32
+    
+    Epoch: 2 Iteration: 12
+    
+    SAMPLE TEXT:
+    i 'm not proud of this <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    সময গান টমের তমি এমনিতে চেচাচছে সময বযপারে সবাই হারিযে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি এটায গরবিত নই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.00889
+    
+    CHOSEN SAMPLE NO.: 33
+    
+    Epoch: 2 Iteration: 13
+    
+    SAMPLE TEXT:
+    i 'm busy <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পারব দাডাও আপনাকে পরেন <EOS> সময পারছেন
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি বযসত। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.35917
+    
+    CHOSEN SAMPLE NO.: 9
+    
+    Epoch: 2 Iteration: 14
+    
+    SAMPLE TEXT:
+    is there any mail for me <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    এটা <EOS> <EOS> টমের <EOS> <EOS> করলো। মখ চায না
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমার জনয কোনো ডাক আছে <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.33615
+    
+    CHOSEN SAMPLE NO.: 40
+    
+    Epoch: 2 Iteration: 15
+    
+    SAMPLE TEXT:
+    you are not paying attention <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    রবিবার ওঠো মাংস চাই একমাতর নাও। কি চাই বনধ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তমি কিনত মনোযোগ দিচছো না। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.56014
+    
+    CHOSEN SAMPLE NO.: 14
+    
+    Epoch: 2 Iteration: 16
+    
+    SAMPLE TEXT:
+    eat something <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বযকতি। বসবাস থেকে <EOS> আছি।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কিছ খেযে নিন। <EOS> <PAD> 
+    
+    loss=4.05344
+    
+    CHOSEN SAMPLE NO.: 52
+    
+    Epoch: 2 Iteration: 17
+    
+    SAMPLE TEXT:
+    she did not tell me her name <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টমের করেছে বলতে টমকে রাখন। বলে আপনার দাডালেন। একলা চিৎকার দেখে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ও আমাকে ওর নাম বলেনি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.983
+    
+    CHOSEN SAMPLE NO.: 43
+    
+    Epoch: 2 Iteration: 18
+    
+    SAMPLE TEXT:
+    where would tom go <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    না। যা টম দিন। আমি <EOS> আমি করব।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম আর কোথায যাবে <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.51351
+    
+    CHOSEN SAMPLE NO.: 39
+    
+    Epoch: 2 Iteration: 19
+    
+    SAMPLE TEXT:
+    tom 's deaf <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টমের আপনার বাডি এটা আমি কি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম বধির। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.63925
+    
+    CHOSEN SAMPLE NO.: 24
+    
+    Epoch: 2 Iteration: 20
+    
+    SAMPLE TEXT:
+    i give you my word <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    খালি আছে। <EOS> করা এই আপনি আমি আমাদের নেই।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি তোমাকে কথা দিলাম। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.8243
+    
+    CHOSEN SAMPLE NO.: 26
+    
+    Epoch: 2 Iteration: 21
+    
+    SAMPLE TEXT:
+    you can study here <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বাডিতে তিনি আমার <EOS> আমার মারলাম। কাছে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তমি এখানে পডাশোনা করতে পার। <EOS> <PAD> 
+    
+    loss=4.09468
+    
+    CHOSEN SAMPLE NO.: 59
+    
+    Epoch: 2 Iteration: 22
+    
+    SAMPLE TEXT:
+    do not come in <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ধরে হাসলো। যাও। নাম ভেবে লডবো। যা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ভেতরে আসবেন না। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.10425
+    
+    CHOSEN SAMPLE NO.: 33
+    
+    Epoch: 2 Iteration: 23
+    
+    SAMPLE TEXT:
+    i 'm genuinely happy for tom <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টম ভাগ আমার চাই। কার চাই। আমি বলে না।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি পরকতই টমের জনয খশি হযেছি। <EOS> <PAD> <PAD> 
+    
+    loss=4.53609
+    
+    CHOSEN SAMPLE NO.: 45
+    
+    Epoch: 2 Iteration: 24
+    
+    SAMPLE TEXT:
+    no one knew it <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    জিজঞাসা আছে। টম আপনাকে উনি গাডি আমার কি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কেউই এটা জানতো না। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.51969
+    
+    CHOSEN SAMPLE NO.: 59
+    
+    Epoch: 2 Iteration: 25
+    
+    SAMPLE TEXT:
+    hello <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    তমি ফোন খায। আছে। যাবে তোমার
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    নমসকার <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.11391
+    
+    CHOSEN SAMPLE NO.: 22
+    
+    Epoch: 2 Iteration: 26
+    
+    SAMPLE TEXT:
+    i like him <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    হাসলো। চিৎকার বাডি। পারবে <EOS> চাই
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমার ওকে ভালো লাগে। <EOS> <PAD> 
+    
+    loss=4.05172
+    
+    CHOSEN SAMPLE NO.: 50
+    
+    Epoch: 2 Iteration: 27
+    
+    SAMPLE TEXT:
+    tom is living in boston <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    কেন চাই। <EOS> ভালো ফল আমি <EOS> আমি চর
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম বসটনে থাকছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.79604
+    
+    CHOSEN SAMPLE NO.: 40
+    
+    Epoch: 2 Iteration: 28
+    
+    SAMPLE TEXT:
+    this is not a good sign <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    যারা <EOS> বইটা ওদের আপনি <EOS> টম দটো <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এটা ভালো লকষণ নয। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.27584
+    
+    CHOSEN SAMPLE NO.: 61
+    
+    Epoch: 2 Iteration: 29
+    
+    SAMPLE TEXT:
+    keep it <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পারেন। সময দিন। এখানে। কোরো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ওটা রাখন। <EOS> <PAD> <PAD> 
+    
+    loss=3.62392
+    
+    CHOSEN SAMPLE NO.: 4
+    
+    Epoch: 2 Iteration: 30
+    
+    SAMPLE TEXT:
+    your time is up <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> <EOS> এই পারি একমত। এখনো আর <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমার সময শেষ। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.58457
+    
+    CHOSEN SAMPLE NO.: 47
+    
+    Epoch: 2 Iteration: 31
+    
+    SAMPLE TEXT:
+    the station is pretty far <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পরতি <EOS> আজ <EOS> দ <EOS> গেছিলেন। আছেন।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    সটেশনটা বেশ কিছটা দরে। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.01864
+    
+    CHOSEN SAMPLE NO.: 48
+    
+    Epoch: 2 Iteration: 32
+    
+    SAMPLE TEXT:
+    fill out this form please <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বোঝা দখল চেচালেন। এটা আমাকে বঝতে তিনি কযেক তেশরা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    অনগরহ করে এই ফরমটি পরণ করন। <EOS> <PAD> <PAD> 
+    
+    loss=3.7789
+    
+    CHOSEN SAMPLE NO.: 3
+    
+    Epoch: 2 Iteration: 33
+    
+    SAMPLE TEXT:
+    what is your home address <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বিশবাস টম বনধ দখতে অসফল বলতে <EOS> বাডির
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমার বাডির ঠিকানাটা কী <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.34493
+    
+    CHOSEN SAMPLE NO.: 55
+    
+    Epoch: 2 Iteration: 34
+    
+    SAMPLE TEXT:
+    do not let it get soiled <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    শর নাম খেযে আগে কথা ওনাকে <EOS> অনগরহ ভালো
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এটাকে নোংরা হতে দেবেন না। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.15138
+    
+    CHOSEN SAMPLE NO.: 16
+    
+    Epoch: 2 Iteration: 35
+    
+    SAMPLE TEXT:
+    i agree with you <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    তমি তমি কষমা সবাই <EOS> বললেন। করছে।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি আপনার সাথে একমত। <EOS> <PAD> <PAD> 
+    
+    loss=3.79577
+    
+    CHOSEN SAMPLE NO.: 35
+    
+    Epoch: 2 Iteration: 36
+    
+    SAMPLE TEXT:
+    tom can read french <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> বসটন আমার আপনার আর গানটা <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম ফরাসি পডতে পারে। <EOS> <PAD> <PAD> 
+    
+    loss=3.9028
+    
+    CHOSEN SAMPLE NO.: 17
+    
+    Epoch: 2 Iteration: 37
+    
+    SAMPLE TEXT:
+    turn left here <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ওটার ভলে টম মযাকডোনালডসের <EOS> রাখতে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এখান থেকে বাদিকে নিন। <EOS> <PAD> 
+    
+    loss=3.68729
+    
+    CHOSEN SAMPLE NO.: 39
+    
+    Epoch: 2 Iteration: 38
+    
+    SAMPLE TEXT:
+    who is speaking <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    কি অনগরহ <EOS> যা <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কে কথা বলছে <EOS> <PAD> 
+    
+    loss=4.41564
+    
+    CHOSEN SAMPLE NO.: 3
+    
+    Epoch: 2 Iteration: 39
+    
+    SAMPLE TEXT:
+    you you will need a ticket to travel by bus <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টম আমি <EOS> নাম না। মালপতরটা সঠিক। <EOS> আমি <EOS> <EOS> <EOS> কমই আমার
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    বাসে করে ঘরতে হলে আপনাকে টিকিট কাটতে হবে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.66935
+    
+    CHOSEN SAMPLE NO.: 0
+    
+    Epoch: 2 Iteration: 40
+    
+    SAMPLE TEXT:
+    do not speak <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ভালো তাইতো তাই এখান বযস। বাকি।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    কথা বলবেন না। <EOS> <PAD> <PAD> 
+    
+    loss=4.18294
+    
+    CHOSEN SAMPLE NO.: 11
+    
+    Epoch: 2 Iteration: 41
+    
+    SAMPLE TEXT:
+    you ought to ask him for advice <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বঝি আঙর আসবেন অবসথাটা হচছে আমাকে আজ ইনি আর ভাষা সেটা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনার ওনাকে পরামরশের জনয জিজঞাসা করা উচিৎ। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.1447
+    
+    CHOSEN SAMPLE NO.: 1
+    
+    Epoch: 2 Iteration: 42
+    
+    SAMPLE TEXT:
+    i teach english <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    দিচছেন করে। জিজঞাসা বাডিতে কি আমাদের
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ইংরাজি পডাই। <EOS> <PAD> <PAD> 
+    
+    loss=4.09819
+    
+    CHOSEN SAMPLE NO.: 39
+    
+    Epoch: 2 Iteration: 43
     
     SAMPLE TEXT:
     what time do you usually get up <EOS> 
@@ -5865,341 +3097,17 @@ with tf.Session() as sess: # Start Tensorflow Session
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি ডেকেছিলে জিজঞাসা পৌছেছি। <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
+    ছিলো। ভালো করি। টম <EOS> <EOS> কি <EOS> টম <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনি এমনিতে কটার সময ঘম থেকে ওঠেন <EOS> <PAD> <PAD> 
+    তমি এমনিতে কটার সময ঘম থেকে ওঠো <EOS> <PAD> <PAD> 
     
-    loss=4.4965
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 5 Iteration: 46
-    
-    SAMPLE TEXT:
-    i was away <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করা উনি জনয খাওযা ইচছে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বাইরে গেছিলাম। <EOS> <PAD> <PAD> 
-    
-    loss=3.96786
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 5 Iteration: 47
-    
-    SAMPLE TEXT:
-    what will you be doing at this time tomorrow <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি কেউ একা <PAD> <EOS> <PAD> <EOS> <PAD> <PAD> কি তা <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কাল আপনি এই সময কি করবেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.9504
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 5 Iteration: 48
-    
-    SAMPLE TEXT:
-    were you born there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আর ভেবছিলাম <EOS> অনধ। আর গেলাম। <PAD> থাকি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি ওখানে জনমেছিলেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.6172
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 5 Iteration: 49
-    
-    SAMPLE TEXT:
-    how tall you are <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আসা খব কেন একা <PAD> কিছই <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কত লমবা <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.88413
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 5 Iteration: 50
-    
-    SAMPLE TEXT:
-    i have an old computer that i do not want anymore <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বযবহার এতে করা সংরকষণ হবে। <PAD> <PAD> তাডাতাডি <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার একটা পরানো কমপিউটার আছে যেটার আমার আর কোনো পরযোজন নেই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.9609
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 5 Iteration: 51
-    
-    SAMPLE TEXT:
-    go inside <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখন পৌনে খায <PAD> গেছি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ভেতরে যাও। <EOS> <PAD> <PAD> 
-    
-    loss=4.56059
-    
-    CHOSEN SAMPLE NO.: 20
-    
-    Epoch: 6 Iteration: 1
-    
-    SAMPLE TEXT:
-    then what <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    গীটারটা তারা আশাবাদী। <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তাহলে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.62812
-    
-    CHOSEN SAMPLE NO.: 8
-    
-    Epoch: 6 Iteration: 2
-    
-    SAMPLE TEXT:
-    please hurry <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এই হাটেন। খজে <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    একট তারাতারি করন। <EOS> <PAD> 
-    
-    loss=3.95788
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 6 Iteration: 3
-    
-    SAMPLE TEXT:
-    please hurry up <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চিডিযাখানাটার খালি <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    একট তারাতারি করন। <EOS> <PAD> 
-    
-    loss=4.40843
-    
-    CHOSEN SAMPLE NO.: 62
-    
-    Epoch: 6 Iteration: 4
-    
-    SAMPLE TEXT:
-    i want this guitar <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <PAD> এসেছিলো <EOS> <EOS> <EOS> <PAD> করেছিলাম।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার এই গীটারটা চাই। <EOS> <PAD> <PAD> 
-    
-    loss=4.14236
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 6 Iteration: 5
-    
-    SAMPLE TEXT:
-    tom saw you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার জমা কর। <EOS> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আপনাকে দেখলো। <EOS> <PAD> <PAD> 
-    
-    loss=3.64915
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 6 Iteration: 6
-    
-    SAMPLE TEXT:
-    what is your favorite television program <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কে আমার <EOS> <EOS> <PAD> <EOS> <PAD> <EOS> এখনো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমারে পরিয টেলিভিশন কারযকরমটা কী <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=5.05556
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 6 Iteration: 7
-    
-    SAMPLE TEXT:
-    may i look at your passport <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি আমি <EOS> <PAD> <PAD> <PAD> চম <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কি আপনার পাসপোরটটি দেখতে পারি <EOS> <PAD> <PAD> 
-    
-    loss=4.54909
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 6 Iteration: 8
-    
-    SAMPLE TEXT:
-    tom is teaching me french <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কাল সবাই <PAD> ছিলে <PAD> <PAD> <PAD> তমি লমবা।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আমাকে ফরাসি পডাচছে। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.65895
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 6 Iteration: 9
-    
-    SAMPLE TEXT:
-    go home <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মনে চেচানো <EOS> কত মারলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাডি যা। <EOS> <PAD> <PAD> 
-    
-    loss=4.15118
-    
-    CHOSEN SAMPLE NO.: 44
-    
-    Epoch: 6 Iteration: 10
-    
-    SAMPLE TEXT:
-    my mother is out <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তারাতারি আমার নাম না। <PAD> করছিল। পাবো। <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার মা বাইরে। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.80806
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 6 Iteration: 11
-    
-    SAMPLE TEXT:
-    tom has been working here since 2013 <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তার একদম <EOS> করবেন হলো <PAD> <PAD> <PAD> <PAD> বলতে আলাদা তোর
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম এখানে ২০১৩ থেকে কাজ করছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.79727
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 6 Iteration: 12
-    
-    SAMPLE TEXT:
-    i 'm almost sure <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যা আপনার বাডিতেই আপনি <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি পরায নিশচিত। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.89258
+    loss=4.50791
     
     CHOSEN SAMPLE NO.: 14
     
-    Epoch: 6 Iteration: 13
+    Epoch: 2 Iteration: 44
     
     SAMPLE TEXT:
     i used to play tennis <EOS> 
@@ -6207,792 +3115,810 @@ with tf.Session() as sess: # Start Tensorflow Session
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    কি ফরাসিতে <PAD> কি <PAD> <PAD> <PAD> <PAD> বলতে
+    কথা খাচছিল। গেছিলো। বধির। তারিফ <EOS> করছিলো। কর। দীরঘতম
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
     আমি টেনিস খেলতাম। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.77934
+    loss=3.87848
     
-    CHOSEN SAMPLE NO.: 18
+    CHOSEN SAMPLE NO.: 24
     
-    Epoch: 6 Iteration: 14
+    Epoch: 2 Iteration: 45
     
     SAMPLE TEXT:
-    what time does the first train leave <EOS> 
+    i do not want to go with tom <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    তিনি তার টম পারে। কিছই <PAD> <PAD> একদম <PAD> <PAD> পারেন।
+    এটা পাবো। যথেষট আজ তোমরা যান। পারি হাসানোর বলছেন কথা আছি। পরেছিল।
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    পরথম টরেনটা কটার সময ছাডে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমি টমের সাথে যেতে চাই না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.36229
-    
-    CHOSEN SAMPLE NO.: 40
-    
-    Epoch: 6 Iteration: 15
-    
-    SAMPLE TEXT:
-    tom is inside <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    শীত আমি হযে দেখলো। <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম ভেতরে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.72071
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 6 Iteration: 16
-    
-    SAMPLE TEXT:
-    he spoke <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আসন। কি তারাতারিই ফরাসিতে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উনি বললেন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.55443
-    
-    CHOSEN SAMPLE NO.: 49
-    
-    Epoch: 6 Iteration: 17
-    
-    SAMPLE TEXT:
-    yesterday was my seventeenth birthday <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মেরিকে টম সাহাযয <PAD> চায <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    গতকাল আমার সতেরোতম জনমদিন ছিলো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.06852
-    
-    CHOSEN SAMPLE NO.: 60
-    
-    Epoch: 6 Iteration: 18
-    
-    SAMPLE TEXT:
-    tom was with me all day <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খালি আমি <PAD> <EOS> করা <PAD> <PAD> <PAD> আমাকে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আমার সঙগে সারা দিন ছিল। <EOS> <PAD> <PAD> 
-    
-    loss=4.15833
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 6 Iteration: 19
-    
-    SAMPLE TEXT:
-    what time do you get up <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার আপনি বযাঙকে রাতের <EOS> <PAD> জিতলো। <PAD> <PAD> হযেছিলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কটার সময ঘম থেকে ওঠেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.03051
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 6 Iteration: 20
-    
-    SAMPLE TEXT:
-    they are doctors <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ককরকে হযেগেছিলাম। করে সতরী। <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওনারা ডাকতার। <EOS> <PAD> <PAD> 
-    
-    loss=4.19367
-    
-    CHOSEN SAMPLE NO.: 37
-    
-    Epoch: 6 Iteration: 21
-    
-    SAMPLE TEXT:
-    birds fly <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বস। ওখানে নাডলো। <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    পাখি ওডে। <EOS> <PAD> <PAD> 
-    
-    loss=4.1448
-    
-    CHOSEN SAMPLE NO.: 42
-    
-    Epoch: 6 Iteration: 22
-    
-    SAMPLE TEXT:
-    it is me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখন জোরে করি। খব <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.83123
-    
-    CHOSEN SAMPLE NO.: 28
-    
-    Epoch: 6 Iteration: 23
-    
-    SAMPLE TEXT:
-    i want a guitar <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পলেনটাকে তোমাকে ঠিক <PAD> <PAD> <PAD> বযগ।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার একটা গীটার চাই। <EOS> <PAD> <PAD> 
-    
-    loss=3.86247
-    
-    CHOSEN SAMPLE NO.: 28
-    
-    Epoch: 6 Iteration: 24
-    
-    SAMPLE TEXT:
-    what time does the dining room open <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করলো। ওখানেই বেশি <EOS> <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    খাবার ঘরটা কখন খোলে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.08265
-    
-    CHOSEN SAMPLE NO.: 30
-    
-    Epoch: 6 Iteration: 25
-    
-    SAMPLE TEXT:
-    tom stopped screaming <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দৌডান। টম <EOS> <PAD> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম চিৎকার করা বনধ করলো। <EOS> 
-    
-    loss=3.61127
-    
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 6 Iteration: 26
-    
-    SAMPLE TEXT:
-    mistakes like these are easily overlooked <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ধরে আহত। করে <PAD> <EOS> <PAD> <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এই ধরনের ভলগলো খব সহজেই উপেকষা করা হয। <EOS> <PAD> 
-    
-    loss=4.12171
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 6 Iteration: 27
-    
-    SAMPLE TEXT:
-    i forgot your phone number <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটার টম ছাডা <EOS> <PAD> <EOS> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তোমার ফোন নামবারটা ভলে গেছি। <EOS> <PAD> 
-    
-    loss=4.31328
-    
-    CHOSEN SAMPLE NO.: 30
-    
-    Epoch: 6 Iteration: 28
-    
-    SAMPLE TEXT:
-    everything is over <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মেযে তিনজন সারা সনদর। নিতে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সব শেষ। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.26358
-    
-    CHOSEN SAMPLE NO.: 17
-    
-    Epoch: 6 Iteration: 29
-    
-    SAMPLE TEXT:
-    where are your things <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তোমাকে আবার আই <EOS> তা <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমাদের জিনিসপতর কোথায <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.31097
-    
-    CHOSEN SAMPLE NO.: 20
-    
-    Epoch: 6 Iteration: 30
-    
-    SAMPLE TEXT:
-    i 'm bad at sports <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তার টম ছাডো। ভালো <EOS> <EOS> <PAD> তা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি খেলাধলায খারাপ। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.1637
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 6 Iteration: 31
-    
-    SAMPLE TEXT:
-    how old is this tree <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    লোকেরা আমার আপনি বলেননি। <PAD> <PAD> করতে <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এই গাছটা বযস কত <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.77163
-    
-    CHOSEN SAMPLE NO.: 44
-    
-    Epoch: 6 Iteration: 32
-    
-    SAMPLE TEXT:
-    do you understand what i want to say <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চারচটার কতো চেচাচছে । <PAD> <PAD> <PAD> <PAD> <PAD> <EOS> হযেছিলো। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কী বলতে চাইছি আপনি বঝতে পারছেন <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.09386
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 6 Iteration: 33
-    
-    SAMPLE TEXT:
-    tom is sick <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মা আপনার চাই। আছেন না। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম অসসথ। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.87569
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 6 Iteration: 34
-    
-    SAMPLE TEXT:
-    how do you write your last name <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নে চেষটা বযস ভাবে <PAD> <PAD> <PAD> <PAD> করতে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার পদবিটি কিভাবে লেখেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.3604
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 6 Iteration: 35
-    
-    SAMPLE TEXT:
-    valentine 's day is celebrated all around the world <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি শিরনামটা কতো <EOS> থাকেন। <PAD> <PAD> <PAD> সসতা <PAD> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ভযালেনটাইন ডে সারা পথিবী জডে পালন করা হয। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.74226
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 6 Iteration: 36
-    
-    SAMPLE TEXT:
-    i know all my neighbors <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আসবো টম যাচছি। আলোটা করেছি। <PAD> <EOS> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আমার সব পরতিবেশীকে চিনি। <EOS> <PAD> <PAD> 
-    
-    loss=3.90807
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 6 Iteration: 37
-    
-    SAMPLE TEXT:
-    is this your car <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম আমার সাডে <EOS> ছিলাম। <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটা কি আপনার গাডি <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.49463
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 6 Iteration: 38
-    
-    SAMPLE TEXT:
-    no one laughed <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    অনগরহ একটা <EOS> ওকে বযগ। সে <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কেউ হাসলো না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.64158
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 6 Iteration: 39
-    
-    SAMPLE TEXT:
-    i 've never told anyone about this <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    জিনিসপতর দিকে জডে <EOS> <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কোনদিন কাউকে এই বযপারে বলিনি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.23629
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 6 Iteration: 40
-    
-    SAMPLE TEXT:
-    i do not blame you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার আমি খেযে গেছি। রাসতা <PAD> <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আপনাকে দোষ দিচছি না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.72207
-    
-    CHOSEN SAMPLE NO.: 60
-    
-    Epoch: 6 Iteration: 41
-    
-    SAMPLE TEXT:
-    do you want to eat noodles or rice <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি এখানে কলানত অষধ <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি নডলস খেতে চাও না ভাত খেতে চাও <EOS> <PAD> <PAD> 
-    
-    loss=4.2803
-    
-    CHOSEN SAMPLE NO.: 23
-    
-    Epoch: 6 Iteration: 42
-    
-    SAMPLE TEXT:
-    he can read <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নাক বাডিতে চেযেছিলাম। <EOS> চাই <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সে পডতে পারে। <EOS> <PAD> <PAD> 
-    
-    loss=3.65548
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 6 Iteration: 43
-    
-    SAMPLE TEXT:
-    tom can not read all these books in one day <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমাদের শনি জন করছে। <PAD> <PAD> <PAD> <PAD> <PAD> <EOS> <PAD> <PAD> <PAD> রাখে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম একদিনে এতগলো বই পডতে পারবে না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.02744
-    
-    CHOSEN SAMPLE NO.: 36
-    
-    Epoch: 6 Iteration: 44
-    
-    SAMPLE TEXT:
-    i 've seen it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমের বনধ দিতে করতো। <EOS> একলা না। <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এটা দেখেছি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.54768
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 6 Iteration: 45
-    
-    SAMPLE TEXT:
-    there are no problems <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আগে এই তার অভিজঞ <PAD> <PAD> <PAD>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কোনো অসবিধা নেই। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.9008
+    loss=4.22809
     
     CHOSEN SAMPLE NO.: 5
     
-    Epoch: 6 Iteration: 46
+    Epoch: 2 Iteration: 46
     
     SAMPLE TEXT:
-    are those yours <EOS> 
+    where do you live <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    হল খব তিনটে সোমবার কল বলতে শনন।
+    শেষ। <EOS> <EOS> <EOS> সময সটেশন আল <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    সেইগলো কি আপনার <EOS> <PAD> <PAD> <PAD> 
+    তমি কোথায থাকো <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.36358
+    loss=3.53752
+    
+    CHOSEN SAMPLE NO.: 31
+    
+    Epoch: 2 Iteration: 47
+    
+    SAMPLE TEXT:
+    turn left at the corner <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পছনদ <EOS> করে করলো। <EOS> <EOS> টম ওনাকে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    মোডে গিযে বাদিকে বেকে যাবেন। <EOS> <PAD> <PAD> 
+    
+    loss=4.91523
+    
+    CHOSEN SAMPLE NO.: 29
+    
+    Epoch: 2 Iteration: 48
+    
+    SAMPLE TEXT:
+    that is my cat <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    কাজই থাকো। ঘমাতে ওর না। <EOS> <EOS> করি।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ওটা আমার বিডাল। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.53141
+    
+    CHOSEN SAMPLE NO.: 2
+    
+    Epoch: 2 Iteration: 49
+    
+    SAMPLE TEXT:
+    this will cost €30 <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বনধ। পেযেছিলাম। আসেনি। <EOS> তমি পরথম দেখেছি। বযাথা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এটার দাম পডবে €৩০। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.54887
+    
+    CHOSEN SAMPLE NO.: 55
+    
+    Epoch: 2 Iteration: 50
+    
+    SAMPLE TEXT:
+    tom 's alone <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    আছেন একটা চেচালো। ফোন টম বেকে গরনথাগারে।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম একলা আছে। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.6899
+    
+    CHOSEN SAMPLE NO.: 63
+    
+    Epoch: 2 Iteration: 51
+    
+    SAMPLE TEXT:
+    i do not agree with him <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> করে থাকে। কি তমি রাখেন। কাছ আটটার খশি বাবা
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ওনার সাথে একমত নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.25289
+    
+    CHOSEN SAMPLE NO.: 59
+    
+    Epoch: 3 Iteration: 1
+    
+    SAMPLE TEXT:
+    they have not done anything wrong <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    এটা সবাই এটা ছিলে। দাডিযেছিলো। আওযাজ আমি কি আপনি দেখতে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ওনারা কোনো ভল কিছ তো করেননি। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.03251
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 3 Iteration: 2
+    
+    SAMPLE TEXT:
+    when did you begin studying english <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> <EOS> কোথায তাই কি মারলাম। ওটার দেখা আমি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনি ইংরাজি পডা কবে থেকে শর করলেন <EOS> <PAD> 
+    
+    loss=4.20393
+    
+    CHOSEN SAMPLE NO.: 11
+    
+    Epoch: 3 Iteration: 3
+    
+    SAMPLE TEXT:
+    what time do you usually go to bed <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    দিন খান। না। এটা তোর দিযেছে। ছেডে সাথে দাত পরশনের করছিস করে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তমি এমনিতে কটার সময ঘমাতে যাও <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.90957
+    
+    CHOSEN SAMPLE NO.: 2
+    
+    Epoch: 3 Iteration: 4
+    
+    SAMPLE TEXT:
+    some of my friends can speak french well <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    সটেশন শেষ দিযেছি। যাবে। শিখতে খেলোযার। এসে থাক। ওনার <EOS> ওঠো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমার বনধদের মধযে কেউ কেউ ভালো ফরাসি বলতে পারে। <EOS> <PAD> 
+    
+    loss=4.24333
     
     CHOSEN SAMPLE NO.: 18
     
-    Epoch: 6 Iteration: 47
+    Epoch: 3 Iteration: 5
     
     SAMPLE TEXT:
-    do you speak english <EOS> 
+    we won <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    ওর শবদটার <EOS> <EOS> কেন <PAD> <PAD> <PAD>
+    নয। ভালো কষমাপরারথনা চান বাস
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনারা ইংরাজি বলতে পারেন <EOS> <PAD> <PAD> <PAD> 
+    আমরা জিতে গেছে। <EOS> <PAD> 
     
-    loss=3.57734
+    loss=4.04047
     
-    CHOSEN SAMPLE NO.: 62
+    CHOSEN SAMPLE NO.: 19
     
-    Epoch: 6 Iteration: 48
+    Epoch: 3 Iteration: 6
     
     SAMPLE TEXT:
-    my father is in <EOS> 
+    my stomach hurts after meals <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    কি তিনি উপনযাস <EOS> <PAD> <PAD> <EOS> <EOS>
+    না। বাবার ভাবে <EOS> জানি। ফরাসি করবেন কথা টম
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমার বাবা ভেতরে। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    খাওযার পর আমার পেট বযাথা করে। <EOS> <PAD> <PAD> 
     
-    loss=3.39322
+    loss=3.96237
     
-    CHOSEN SAMPLE NO.: 18
+    CHOSEN SAMPLE NO.: 13
     
-    Epoch: 6 Iteration: 49
+    Epoch: 3 Iteration: 7
     
     SAMPLE TEXT:
-    do you have time <EOS> 
+    i like him <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    যে আমার পরিষকার <EOS> <PAD> <PAD> <EOS> <PAD>
+    মিথযা কর। আমি কাটতে আমার আর
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তোমার হাতে সময আছে <EOS> <PAD> <PAD> <PAD> 
+    আমি তাকে পছনদ করি। <EOS> <PAD> 
     
-    loss=3.44904
+    loss=3.37837
     
-    CHOSEN SAMPLE NO.: 45
+    CHOSEN SAMPLE NO.: 35
     
-    Epoch: 6 Iteration: 50
+    Epoch: 3 Iteration: 8
     
     SAMPLE TEXT:
-    tom is one of the most generous people i ever met <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    i 'm not a doctor <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আবার সারা ভালো <EOS> <PAD> <PAD> <PAD> <EOS> করব। <PAD> <PAD> <PAD> কথা <PAD> <PAD> <PAD> কি <PAD>
+    সময অনয আমি দরজাটা <EOS> <EOS> সবাই <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম আমার দেখা সবচেযে উদার মানযদের মধযে একজন। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমি ডাকতার নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=5.26957
+    loss=4.29195
     
-    CHOSEN SAMPLE NO.: 40
+    CHOSEN SAMPLE NO.: 58
     
-    Epoch: 6 Iteration: 51
+    Epoch: 3 Iteration: 9
     
     SAMPLE TEXT:
-    tom hardly ever keeps his word <EOS> 
+    what will you be doing at this time tomorrow <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    হাই সমসযা বাডি <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD>
+    পরোপরি আমার টম ঠিক মা শতরর <EOS> শিখতে চিৎকার সাথে খেতে হাসপাতালে
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম খব কমই তার কথা রাখে। <EOS> <PAD> <PAD> <PAD> 
+    কাল তমি এই সময কি করবে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.09359
+    loss=4.69243
     
-    CHOSEN SAMPLE NO.: 14
+    CHOSEN SAMPLE NO.: 56
     
-    Epoch: 7 Iteration: 1
+    Epoch: 3 Iteration: 10
     
     SAMPLE TEXT:
-    why did this occur <EOS> 
+    do not call me <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    নাকি ওনাদের গেছিলাম। <EOS> তাই <PAD> বলি। <PAD>
+    বডো আসছেন পডে। খরগোশ বাইরে পেতে তোমার হবে
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    এটা কেনো ঘটলো <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আমাকে ডেকো না। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.38648
+    loss=3.56516
+    
+    CHOSEN SAMPLE NO.: 57
+    
+    Epoch: 3 Iteration: 11
+    
+    SAMPLE TEXT:
+    who is he <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> নডলস দেখাবেন জানি আজ চটপটে।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ও কে <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.09663
+    
+    CHOSEN SAMPLE NO.: 53
+    
+    Epoch: 3 Iteration: 12
+    
+    SAMPLE TEXT:
+    we will try <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    কি না। মজা করি। সকালে আমি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমরা চেষটা করব। <EOS> <PAD> <PAD> 
+    
+    loss=3.98838
+    
+    CHOSEN SAMPLE NO.: 9
+    
+    Epoch: 3 Iteration: 13
+    
+    SAMPLE TEXT:
+    she can say whatever she wants <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> করা এমনিতে <EOS> কিছ <EOS> <EOS> আমার আজ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    ওনার যা ইচছে উনি বলতে পারেন। <EOS> <PAD> <PAD> 
+    
+    loss=4.78535
+    
+    CHOSEN SAMPLE NO.: 48
+    
+    Epoch: 3 Iteration: 14
+    
+    SAMPLE TEXT:
+    how can i get to gate a-1 <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    এই ইচছা কষমা <EOS> ওইগলো পেলাম। দেখলো। তার আপনার সাহাযয
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি a-1 গেটে কিভাবে যাব <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.21944
+    
+    CHOSEN SAMPLE NO.: 32
+    
+    Epoch: 3 Iteration: 15
+    
+    SAMPLE TEXT:
+    why are you shouting <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    খবর সাবধান লাগে। চালাবার দ দাত ফরাসিতেও দিলাম।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমরা চিৎকার করছো কেন <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.64164
+    
+    CHOSEN SAMPLE NO.: 12
+    
+    Epoch: 3 Iteration: 16
+    
+    SAMPLE TEXT:
+    these are birds <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    বরণানকরমে করবেন। শেষের পারে। বললেন সতযি পারটিতে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এইগলো পাখি। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.55749
+    
+    CHOSEN SAMPLE NO.: 39
+    
+    Epoch: 3 Iteration: 17
+    
+    SAMPLE TEXT:
+    it looks like tom has broken a couple of ribs <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    ওটা আর করি। তিনি কি আমরা এসে <EOS> বেকে ঘাড আমি শনলো। যাবেন খাই।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    মনে হচছে টমের কযেকটা পাজর ভেঙগেছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.2831
+    
+    CHOSEN SAMPLE NO.: 31
+    
+    Epoch: 3 Iteration: 18
+    
+    SAMPLE TEXT:
+    i do not want to be like that <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    থেকে ভেতরে <EOS> ফরাসি আমার কষণিকের বলতে <EOS> <EOS> কি <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ওইরকম হতে চাই না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.93504
     
     CHOSEN SAMPLE NO.: 8
     
-    Epoch: 7 Iteration: 2
+    Epoch: 3 Iteration: 19
     
     SAMPLE TEXT:
-    they have two daughters <EOS> 
+    me too <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    বিশবাস কী বেহালা দ <PAD> <PAD> <PAD> <EOS>
+    এ <EOS> <EOS> <EOS> কি মেরিকে
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    ওনাদের দটো মেযে আছে। <EOS> <PAD> <PAD> <PAD> 
+    আমিও। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.39317
+    loss=3.31524
+    
+    CHOSEN SAMPLE NO.: 32
+    
+    Epoch: 3 Iteration: 20
+    
+    SAMPLE TEXT:
+    why do you want to hurt tom <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> পারি। আর করেছে। কাছে দিযে কঠিন। মডতে কোনো পরেমে লিখলো।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আপনি টমকে আঘাত দিতে চান কেন <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.9945
+    
+    CHOSEN SAMPLE NO.: 46
+    
+    Epoch: 3 Iteration: 21
+    
+    SAMPLE TEXT:
+    tom was shouting <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    নিযে টমকে হাসলো। করে করি।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম চেচাচছিলো। <EOS> <PAD> <PAD> 
+    
+    loss=4.44068
+    
+    CHOSEN SAMPLE NO.: 51
+    
+    Epoch: 3 Iteration: 22
+    
+    SAMPLE TEXT:
+    i 'm exhausted <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    তোদের যে বনধ টম কাছে থেকে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি কলানত। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.73241
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 3 Iteration: 23
+    
+    SAMPLE TEXT:
+    i do not deny it <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    আমি সেটা পারব <EOS> <EOS> <EOS> যে তো <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি এটা অসবীকার করি না। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.9017
+    
+    CHOSEN SAMPLE NO.: 20
+    
+    Epoch: 3 Iteration: 24
+    
+    SAMPLE TEXT:
+    stop tom <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> <EOS> টমকে সে আমি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টমকে আটকান। <EOS> <PAD> <PAD> 
+    
+    loss=3.58409
+    
+    CHOSEN SAMPLE NO.: 28
+    
+    Epoch: 3 Iteration: 25
+    
+    SAMPLE TEXT:
+    maybe it will snow <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    চেষটা থাকব। বলবেন জিজঞাসা লাঞচ আগে <EOS> হযেছে।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    হযতো বরফ পরবে। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=3.66221
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 3 Iteration: 26
+    
+    SAMPLE TEXT:
+    tom visited boston <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    খালি চাও ভাগনা থাকলো। চলে না।
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম বসটন গেছিলেন। <EOS> <PAD> <PAD> 
+    
+    loss=3.76476
     
     CHOSEN SAMPLE NO.: 17
     
-    Epoch: 7 Iteration: 3
+    Epoch: 3 Iteration: 27
     
     SAMPLE TEXT:
-    where can i buy a ticket <EOS> 
+    tom is definitely not happy <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    কে দাডাও। যাস <EOS> <PAD> <PAD> <PAD> <PAD> <PAD>
+    <EOS> <EOS> আছেন। হযেগেছিলাম। তার আমার টম আমার দেখে
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি টিকিট কোথা থেকে কিনতে পারব <EOS> <PAD> <PAD> 
+    টম সপষটতই খশি নয। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.11485
+    loss=3.75236
     
-    CHOSEN SAMPLE NO.: 22
+    CHOSEN SAMPLE NO.: 62
     
-    Epoch: 7 Iteration: 4
+    Epoch: 3 Iteration: 28
     
     SAMPLE TEXT:
-    i 'm looking for a room for rent <EOS> 
+    i 'd like to change my room <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    একলা আপনার হযেছে। করছেন নামাইনি। <PAD> লাগে <PAD> পালন <PAD> <PAD> <PAD>
+    টম ফরাসি নটার <EOS> টম আমি অপেকষা তিনি টমের <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি একটা ঘর ভারা খজছি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমি আমার ঘরটা পালটাতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.02293
+    loss=3.61722
     
-    CHOSEN SAMPLE NO.: 61
+    CHOSEN SAMPLE NO.: 18
     
-    Epoch: 7 Iteration: 5
+    Epoch: 3 Iteration: 29
     
     SAMPLE TEXT:
-    do you understand what i mean <EOS> <PAD> 
+    why do you want to leave today <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আপনার আমি <PAD> কিছই আলর ঘমাতে <PAD> ঘমাতে করন। <PAD> <PAD>
+    এই লোকটা কেউ <EOS> ওটা আওযাজ বযস গেলাম। <EOS> আছেন <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি যা বলতে চাইছি তমি কি তা বঝতে পারছো <EOS> <PAD> 
+    আপনারা আজকেই যেতে চাইছেন কেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.84249
+    loss=3.86553
     
-    CHOSEN SAMPLE NO.: 8
+    CHOSEN SAMPLE NO.: 2
     
-    Epoch: 7 Iteration: 6
+    Epoch: 3 Iteration: 30
     
     SAMPLE TEXT:
-    i changed my name to tom jackson <EOS> 
+    what does your son do <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    তার গাইতে তই হোককাইডো বনধ অপেকষা কেউ আপনি
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমার ছেলে কি করে <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=4.32078
+    
+    CHOSEN SAMPLE NO.: 10
+    
+    Epoch: 3 Iteration: 31
+    
+    SAMPLE TEXT:
+    have you finished it <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    চায যোগয। বযবহার করতে কি করব। দর
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমাদের ওটা করা হযে গেছে <EOS> <PAD> 
+    
+    loss=3.97464
+    
+    CHOSEN SAMPLE NO.: 52
+    
+    Epoch: 3 Iteration: 32
+    
+    SAMPLE TEXT:
+    i 'm still your friend <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টম মা <EOS> <EOS> করে। টমের কাজ <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি এখনো তোমার বনধ আছি। <EOS> <PAD> <PAD> 
+    
+    loss=4.03356
+    
+    CHOSEN SAMPLE NO.: 63
+    
+    Epoch: 3 Iteration: 33
+    
+    SAMPLE TEXT:
+    i do not agree with him <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    আমাদের গবেষণাটি তিনি ছাডে ফরাসিতে <EOS> <EOS> অপেকষা <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমি ওনার সাথে একমত নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=4.01831
+    
+    CHOSEN SAMPLE NO.: 12
+    
+    Epoch: 3 Iteration: 34
+    
+    SAMPLE TEXT:
+    here 's your mug <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> কার হযে টম তমি টম অঙক বনধ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এই নিন আপনার মগ। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.55271
+    
+    CHOSEN SAMPLE NO.: 5
+    
+    Epoch: 3 Iteration: 35
+    
+    SAMPLE TEXT:
+    tom screamed loudly <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পারবেন দিকে <EOS> আপনাকে তোমার
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম জোরে চেচালো। <EOS> <PAD> 
+    
+    loss=4.35615
+    
+    CHOSEN SAMPLE NO.: 26
+    
+    Epoch: 3 Iteration: 36
+    
+    SAMPLE TEXT:
+    eat anything you like <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    পৌনে <EOS> <EOS> আমি জযাকসন। মাছ অসফল খরগোশ
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তোমাদের যা কিছ পছনদ হয তাই খাও। <EOS> 
+    
+    loss=3.52522
+    
+    CHOSEN SAMPLE NO.: 1
+    
+    Epoch: 3 Iteration: 37
+    
+    SAMPLE TEXT:
+    my father is busy <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    <EOS> তার চিৎকার <EOS> আপনার <EOS> <EOS> কাছে
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    আমার বাবা বযসত আছে। <EOS> <PAD> <PAD> <PAD> 
+    
+    loss=3.57193
+    
+    CHOSEN SAMPLE NO.: 62
+    
+    Epoch: 3 Iteration: 38
+    
+    SAMPLE TEXT:
+    wonderful <EOS> <PAD> 
     
