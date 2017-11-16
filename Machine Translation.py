@@ -266,8 +266,8 @@ def decoder(y,enc_out,weights,attention_weights_1,attention_weights_2,dqkv,mask=
     shift1 = weights['shift1']
     scale2 = weights['scale2']
     shift2 = weights['shift2']
-    scale3 = weights['scale2']
-    shift3 = weights['shift2']
+    scale3 = weights['scale3']
+    shift3 = weights['shift3']
 
     sublayer1 = multihead_attention(y,y,y,dqkv,attention_weights_1,pos,mask)
     sublayer1 = tf.nn.dropout(sublayer1,keep_prob)
@@ -366,6 +366,7 @@ def model(x,y,teacher_forcing=True):
     bpd2 = tf.Variable(tf.truncated_normal(shape=[1,vocab_len],stddev=0.01))
                          
     encoderin = x #should be already positionally encoded 
+    encoderin = tf.nn.dropout(encoderin,keep_prob)
     
     #all position encodings for outputs
     pe_out = tf.constant(positional_encoding(max_len,word_vec_dim)) 
@@ -421,7 +422,7 @@ def model(x,y,teacher_forcing=True):
         
         decoderin_part2 = tf.zeros([tf.shape(x)[0],(max_len-filled),word_vec_dim],dtype=tf.float32)
         decoderin = tf.concat([decoderin_part1,decoderin_part2],1)
-        #decoderin = tf.nn.dropout(decoderin,keep_prob)
+        decoderin = tf.nn.dropout(decoderin,keep_prob)
         
         for j in xrange(0,N):
             
@@ -435,8 +436,8 @@ def model(x,y,teacher_forcing=True):
                 'shift1': shift_dec_1[j],
                 'scale2': scale_dec_2[j],
                 'shift2': shift_dec_2[j],
-                'scale3': scale_dec_2[j],
-                'shift3': shift_dec_2[j],
+                'scale3': scale_dec_3[j],
+                'shift3': shift_dec_3[j],
             }
             
             attention_weights_1 = {
