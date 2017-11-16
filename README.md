@@ -1199,8 +1199,8 @@ def model(x,y,teacher_forcing=True):
                 'shift1': shift_dec_1[j],
                 'scale2': scale_dec_2[j],
                 'shift2': shift_dec_2[j],
-                'scale3': scale_dec_2[j],
-                'shift3': shift_dec_2[j],
+                'scale3': scale_dec_3[j],
+                'shift3': shift_dec_3[j],
             }
             
             attention_weights_1 = {
