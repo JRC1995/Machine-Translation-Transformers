@@ -1,7 +1,7 @@
 
 The model is based on:
 
-["Attention Is All You Need" by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin, arXiv:1706.03762](https://arxiv.org/abs/1706.03762) 
+["Attention Is All You Need" by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin. arXiv:1706.03762](https://arxiv.org/abs/1706.03762) 
 
 # Preprocessing Translation Data
 
