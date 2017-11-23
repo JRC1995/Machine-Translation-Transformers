@@ -4,6 +4,7 @@ The model is based on:
 ["Attention Is All You Need" by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin. arXiv:1706.03762](https://arxiv.org/abs/1706.03762) 
 
 # Preprocessing Translation Data
+(from Translation_preprocess.py)
 
 ### Function for expanding English contractions
 
@@ -216,7 +217,7 @@ print string
 
 ### Creating separate vocabulary lists for English words and Bengali words
 
-The index of vocabulary will represent the numerical representation of the word which is the value of vocabulary at that index. 
+The index of vocabulary will represent the numerical representation of the word which is stored at that index. 
 
 
 
@@ -276,8 +277,10 @@ Later lots of pads may be applied after the end of sentence to fit sequence leng
 
 So I also added the word PAD with context words being PADs, and PAD and EOS for embedding.
 
-In this way, first, from each sentence, I am creating a list of words, and corresponding list of context words.
-Doing the same thing for
+(Doing what I wrote directly above, was actually unnecessary but I already did it. We don't need to consider these cases. With masking I will ignore the effect of PADs on the cost, anyway, and the model doesn't need to predict pads correctly. Predicting the EOS properly will be enough. So PAD embedding doesn't need to be taken so seriously.)
+
+In this way, first, from each sentence, I am creating a list of words, and a corresponding list of context words.
+I am doing the same thing for both English and Bengali lines. 
 
 
 ```python
@@ -359,7 +362,7 @@ for i in xrange(len(vectorized_eng)):
 ```
 
 If word = "am" and context = ["I","alright"],
-then, here I will reconstrcut the data as:
+then, from this data I will create the following samples:
 
 input = "am"
 output = "I"
@@ -438,7 +441,9 @@ train_labels = tf.placeholder(tf.int32, shape=[batch_size,1])
 
 See: https://www.tensorflow.org/tutorials/word2vec
 
-for details of word2vec and code description
+for details of word2vec and code description. 
+
+Most of the word2vec code used here are from the Tensorflow tutorial. 
 
 
 ```python
@@ -546,10 +551,6 @@ print "\nOptimization Finished\n"
 
 ### Training for word2vec embedding (For Bengali words)
 
-See: https://www.tensorflow.org/tutorials/word2vec
-
-for details of word2vec and code description
-
 
 ```python
 embeddings_beng = tf.Variable(
@@ -637,7 +638,8 @@ print "\nOptimization Finished\n"
 
 ### Creating Train, Validation, and Test set
 
-Randomly shuffling the complete dataset, and then splitting it into train, validation and test set
+Randomly shuffling the complete dataset (not yet embedded with word2vec embeddings which was learned just now), 
+and then splitting it into train, validation and test set
 
 
 ```python
@@ -669,10 +671,12 @@ test_beng = shuffled_vectorized_beng[train_len+val_len:]
 Mini-batch training requires all lines in a batch to be of equal length.
 We have different lines of different lengths. 
 
-Solution is to fill shorter sentences with PADs so that length of all sentences become equal.
-But, if one sentence in a batch has 20 words, and the same batch has another sentence with one word, then the latter sentence will have to be filled in by at least 19 pads. If most of the sentences start to have more PADs than actual content, training will become troublesome.
+A solution is to fill shorter sentences with PADs so that length of all sentences become equal.
+But, if one sentence in a batch has 20 words, and the same batch has another sentence with one word, then the latter sentence will have to be filled in by at least 19 pads. If most of the sentences start to have more PADs than actual content, training can be problematic.
 
-The solution to that is bucketing. First the sentences in the total list are sorted. After that sentences of similar lengths are closer to each other. Batches are then formed with sentences of similar lengths. Much less padding will be required to turning sentences of similar lengths into senetences of equal lengths. 
+The solution to that is bucketing. First the sentences in the total list are sorted. After that sentences of similar lengths will be closer to each other. Batches are then formed with sentences of similar lengths. Much less padding will be required to turn sentences of similar lengths into sentences of equal lengths. 
+
+Also while creating the batch, the input samples (the Engish lines) will have their words embedded using the recently trained embedding matrix for English. The output samples (the labels) will simply contain the index of the target Bengali word in the Bengali vocabulary list. The labels being in this format will be easier to train with sparse_softmax_cross_entropy cost function of Tensorflow. 
 
 
 ```python
@@ -747,7 +751,7 @@ def bucket_and_batch(x,y,batch_size):
 
 ```
 
-### Creating train, validation and test batches
+### Creating train, validation, and test batches
 
 
 ```python
@@ -776,9 +780,8 @@ with open('translationPICKLE', 'wb') as fp:
     
 ```
 
-
-
 ### Loading Pre-processed Data
+(start of Machine Translation.ipynb)
 
 
 ```python
@@ -811,7 +814,7 @@ test_batch_y = PICK[9]
     
 ```
 
-### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
+### Function for converting vector of size word_vec_dim into the closest representative english word. 
 
 
 ```python
@@ -828,7 +831,7 @@ def vec2word_eng(vec):   # converts a given vector representation into the repre
     
 ```
 
-### Function for generating a sequence of positional codes for positional encoding.
+### Function for generating a sequence of positional codes that will be used for positional encoding
 
 
 ```python
@@ -840,7 +843,7 @@ def positional_encoding(seq_len,model_dimensions):
     return pe.reshape((seq_len,model_dimensions))
 ```
 
-### Hyperparametes.
+### Hyperparameters.
 
 
 ```python
@@ -875,7 +878,7 @@ def layer_norm(inputs,scale,shift,epsilon = 1e-5):
     return LN
 ```
 
-### Pre-generating all possible masks
+### Pre-generating all possible masks (for masked multi-head attention)
 
 These masks are to be used to fill illegal positions with infinity (or a very high value eg. 2^30).
 
@@ -888,8 +891,8 @@ After going through the softmax layer, these positions become close to 0, as it 
 Dynamically creating masks depending on the current position\timestep (depending on which the program can know which positions are legal and which aren't) is, however,
 a bit troublesome with tensorflow tf_while_loop. 
 
-I am pre-generating all possible masks here, and pack them into a tensor such that the network can dynamically
-access the required mask using the index of the tensor (the index will same be the timestep) 
+I am pre-generating all possible masks here, and packing them into a tensor such that the network can dynamically
+access the required mask using the index of the tensor (the index will be the same as the timestep) 
                                                                     
                                                                    
 
@@ -1058,7 +1061,7 @@ def decoder(y,enc_out,weights,attention_weights_1,attention_weights_2,dqkv,mask=
 
 ### Model Definition
 
-It follows the encoder-decoder paradigm. The main exception from standard encoder-decoder paradigm, is that it uses 'transformers' instead of Reccurrent networks. 
+It follows the encoder-decoder architecture. The main exception from standard encoder-decoder paradigm, is that it uses 'transformers' instead of Reccurrent networks. 
 
 If teacher forcing is True, the decoder is made to guess the next output from the previous words in the actual target output, else the decoder predicts the next output from the previously predicted output of the decoder.
 
@@ -1304,9 +1307,9 @@ softmax_output = tf.nn.softmax(output)
 
 ```
 
-### Function to create a Mask
+### Function to create a Mask (to 'mask' the effect of PADs in the target sequence)
 
-The mask will have the same shape as the output batch but with the value 0 wherever there is a padding.
+The mask will have the same shape as the batch of target sequences (sequence of indices of target Bengali words in Bengali vocabulary) but with the value 0 wherever there is an index corresponding to a PAD. 
 The mask will be multipled to the cost (before its averaged), so that any position in the cost tensor that is effected by the pad will be multiplied by 0. This way, the effect of PADs (which we don't need to care about- Only the position of EOS is important) on the cost (and therefore on the gradients) can be nullified. 
 
 
@@ -1324,7 +1327,27 @@ def create_Mask(output_batch):
 ### Training .....
 
 The input batch is positionally encoded before its fed to the network.
+Using RNG to determine if the iteration through the network will use Teacher Forcing or not. 
 
+
+Some comments:
+
+The dataset may not have enough samples for proper training. 
+
+The output contains too many repitition if I take the greedy approach of "argmax(output probability distribution)".
+
+
+(Same experience with the other transformer model I used for abstractive summarization)
+
+Choosing an output word randomly based on its probability in the probability distribution, does brings some variety, but that's just a cheap workaround.
+
+I don't know if beam search will significantly improve anything. 
+
+Training doesn't look any good. But may require better dataset, with more examples, and much longer training to put out something good. 
+
+For now, this is just a toy implementation.
+
+I will not be completing the training for now. So, I will not be setting up validation and testing either. But that can be done later. No evaluation metrics used for now either. I may think of it, if I intend to seriously train and investigate this later. 
 
 ```python
 import string
