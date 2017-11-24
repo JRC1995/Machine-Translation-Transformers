@@ -35,7 +35,7 @@ test_batch_y = PICK[9]
     
 
 
-# ### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
+# ### Function for converting vector of size word_vec_dim into the closest representative english word. 
 
 # In[2]:
 
