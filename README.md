@@ -884,7 +884,7 @@ def layer_norm(inputs,scale,shift,epsilon = 1e-5):
 
 ### Pre-generating all possible masks (for masked multi-head attention)
 
-These masks are to be used to fill illegal positions with infinity (or a very high value eg. 2^30).
+These masks are to be used to fill illegal positions with -infinity (or a very low value eg. -2^30).
 
 Illegal positions are positions in the decoder input sequence which may be filled in the future timestep,
 but currently not filled. These positions shouldn't be allowed to influence the network.
