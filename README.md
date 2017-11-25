@@ -1,6 +1,7 @@
 
 
-# Machine Translation (English to Bengali) using Transformers. 
+# Machine Translation using Transformers. 
+# (English to Bengali) 
 
 The model is based on:
 
