@@ -941,12 +941,10 @@ def positional_encoding(seq_len,model_dimensions):
 
 ### Function for Layer Normalization 
 
-https://arxiv.org/abs/1607.06450
+[Layer Normalization - by Jimmy Lei Ba, Jamie Ryan Kiros, Geoffrey E. Hinton](https://arxiv.org/abs/1607.06450)
 
 
 ```python
-#modified version of def LN used here: 
-#https://theneuralperspective.com/2016/10/27/gradient-topics/
 
 def layer_norm(inputs,scale,shift,epsilon = 1e-5):
 
