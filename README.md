@@ -797,15 +797,16 @@ import numpy as np
 with open ('translationPICKLE', 'rb') as fp:
     PICK = pickle.load(fp)
 
-vocab_eng = PICK[0]
-vocab_beng = PICK[1]
+vocab_eng = PICK[0] 
+vocab_beng = PICK[1] 
 vocab_len = len(vocab_beng)
 
 np_embedding_eng = PICK[2]
 np_embedding_beng = PICK[3]
 np_embedding_eng = np.asarray(np_embedding_eng,np.float32)
 np_embedding_beng = np.asarray(np_embedding_beng,np.float32)
-word_vec_dim = np_embedding_eng.shape[1]
+
+word_vec_dim = np_embedding_eng.shape[1] 
 
 train_batch_x = PICK[4]
 train_batch_y = PICK[5]
@@ -818,7 +819,7 @@ test_batch_y = PICK[9]
     
 ```
 
-### Function for converting vector of size word_vec_dim into the closest representative english word. 
+### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
 
 
 ```python
@@ -835,7 +836,99 @@ def vec2word_eng(vec):   # converts a given vector representation into the repre
     
 ```
 
-### Function for generating a sequence of positional codes that will be used for positional encoding
+### Hyperparameters and Placeholders.
+
+
+```python
+import tensorflow as tf
+
+#Hyperparamters
+
+h=8 #no. of heads
+N=1 #no. of decoder and encoder layers
+learning_rate=0.001
+epochs = 200
+keep_prob = tf.placeholder(tf.float32)
+
+#Placeholders
+
+x = tf.placeholder(tf.float32, [None,None,word_vec_dim])
+y = tf.placeholder(tf.int32, [None,None])
+
+output_len = tf.placeholder(tf.int32)
+
+teacher_forcing = tf.placeholder(tf.bool)
+
+tf_pad_mask = tf.placeholder(tf.float32,[None,None])
+tf_illegal_position_masks = tf.placeholder(tf.float32,[None,None,None])
+
+tf_pe_out = tf.placeholder(tf.float32,[None,None,None]) #positional codes for output
+```
+
+### Model Parameters.
+
+
+```python
+   
+# Dimensions for Q (Query),K (Keys) and V (Values) for attention layers.
+
+dqkv = 32 
+    
+#Parameters for attention sub-layers for all n encoders
+
+Wq_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wk_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wv_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wo_enc = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
+
+#Parameters for position-wise fully connected layers for n encoders
+
+d = 1024
+W1_enc = tf.Variable(tf.truncated_normal(shape=[N,1,1,word_vec_dim,d],stddev=0.01))
+b1_enc = tf.Variable(tf.constant(0,tf.float32,shape=[N,d]))
+W2_enc = tf.Variable(tf.truncated_normal(shape=[N,1,1,d,word_vec_dim],stddev=0.01))
+b2_enc = tf.Variable(tf.constant(0,tf.float32,shape=[N,word_vec_dim]))
+    
+#Parameters for 2 attention sub-layers for all n decoders
+
+Wq_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wk_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wv_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wo_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
+Wq_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wk_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wv_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
+Wo_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
+    
+#Parameters for position-wise fully connected layers for n decoders
+
+d = 1024
+W1_dec = tf.Variable(tf.truncated_normal(shape=[N,1,1,word_vec_dim,d],stddev=0.01))
+b1_dec = tf.Variable(tf.constant(0,tf.float32,shape=[N,d]))
+W2_dec = tf.Variable(tf.truncated_normal(shape=[N,1,1,d,word_vec_dim],stddev=0.01))
+b2_dec = tf.Variable(tf.constant(0,tf.float32,shape=[N,word_vec_dim]))
+    
+#Layer Normalization parameters for encoder
+
+scale_enc_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+shift_enc_1 = tf.Variable(tf.zeros([N,1,1,word_vec_dim]),dtype=tf.float32)
+
+scale_enc_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+shift_enc_2 = tf.Variable(tf.zeros([N,1,1,word_vec_dim]),dtype=tf.float32)
+
+#Layer Normalization parameters for decoder   
+
+scale_dec_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+shift_dec_1 = tf.Variable(tf.zeros([N,1,1,word_vec_dim]),dtype=tf.float32)
+
+scale_dec_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+shift_dec_2 = tf.Variable(tf.zeros([N,1,1,word_vec_dim]),dtype=tf.float32)
+
+scale_dec_3 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
+shift_dec_3 = tf.Variable(tf.zeros([N,1,1,word_vec_dim]),dtype=tf.float32)
+```
+
+### Function for generating a sequence of positional codes for positional encoding.
 
 
 ```python
@@ -847,26 +940,9 @@ def positional_encoding(seq_len,model_dimensions):
     return pe.reshape((seq_len,model_dimensions))
 ```
 
-### Hyperparameters.
-
-
-```python
-import tensorflow as tf
-
-h=8 #no. of heads
-N=3 #no. of decoder and encoder layers
-learning_rate=0.008
-iters = 200
-max_len = 25
-keep_prob = tf.placeholder(tf.float32)
-x = tf.placeholder(tf.float32, [None,None,word_vec_dim])
-y = tf.placeholder(tf.int32, [None,None])
-output_len = tf.placeholder(tf.int32)
-teacher_forcing = tf.placeholder(tf.bool)
-tf_mask = tf.placeholder(tf.float32,[None,None])
-```
-
 ### Function for Layer Normalization 
+
+https://arxiv.org/abs/1607.06450
 
 
 ```python
@@ -877,40 +953,45 @@ def layer_norm(inputs,scale,shift,epsilon = 1e-5):
 
     mean, var = tf.nn.moments(inputs, [1,2], keep_dims=True)
 
-    LN = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
+    LN = tf.multiply((scale / tf.sqrt(var + epsilon)),(inputs - mean)) + shift
  
     return LN
 ```
 
-### Pre-generating all possible masks (for masked multi-head attention)
+### Function to pre-generate masks for illegal positions. 
 
 These masks are to be used to fill illegal positions with -infinity (or a very low value eg. -2^30).
 
-Illegal positions are positions in the decoder input sequence which may be filled in the future timestep,
-but currently not filled. These positions shouldn't be allowed to influence the network.
+Illegal positions are positions of the decoder input tokens that aren't predicted at a given timestep.
 
-The masks are used to assign the value 2^30 to all positions in the tensor influenced by the illegal ones.
+{ In a transformer, the decoder input is of the same shape as the WHOLE decoder output sequence. One word for the sequence is predicted at each timestep (from left to right). So in most timesteps, the left side of the decoder input sequence will contain valid previously predicted output words, but the right side -the yet to be predicted side should contain some values that should be ignored and never attended. We make sure that they're ignored by masking it }
+
+So, the illegal positions depends on the total output length and the no. of predicted output tokens.
+
+The appropriate mask when i output tokens are predicted can be retrieved from mask[i-1] where mask is the return value from this function. The argument out_len that function takes, signifies the total length of the output. 
+
+The masks are used to assign the value -2^30 to all positions in the tensor influenced by the illegal ones.
 After going through the softmax layer, these positions become close to 0, as it should be.
 
 Dynamically creating masks depending on the current position\timestep (depending on which the program can know which positions are legal and which aren't) is, however,
 a bit troublesome with tensorflow tf_while_loop. 
 
-I am pre-generating all possible masks here, and packing them into a tensor such that the network can dynamically
-access the required mask using the index of the tensor (the index will be the same as the timestep) 
-                                                                    
-                                                                   
+I will be pre-generating all the masks with Python native code and feed the list of all required masks to the network at each training step (output length can be different at different training steps). 
+                                                                 
 
 
 ```python
-masks=np.zeros((max_len-1,max_len,max_len),dtype=np.float32)
-
-for i in xrange(1,max_len):
-    mask = np.zeros((max_len,max_len),dtype=np.float32)
-    mask[i:max_len,:] = -2**30
-    mask[:,i:max_len] = -2**30
-    masks[i-1] = mask
+def generate_masks_for_illegal_positions(out_len):
     
-masks = tf.convert_to_tensor(masks) 
+    masks=np.zeros((out_len-1,out_len,out_len),dtype=np.float32)
+    
+    for i in xrange(1,out_len):
+        mask = np.zeros((out_len,out_len),dtype=np.float32)
+        mask[i:out_len,:] = -2**30
+        mask[:,i:out_len] = -2**30
+        masks[i-1] = mask
+        
+    return masks
 ```
 
 ### Function for Multi-Headed Attention.
@@ -928,7 +1009,7 @@ d is the dimension for Q, K and V.
 
 ```python
 
-def attention(Q,K,V,d,pos=0,mask=False):
+def attention(Q,K,V,d,filled=0,mask=False):
 
     K = tf.transpose(K,[0,2,1])
     d = tf.cast(d,tf.float32)
@@ -936,15 +1017,14 @@ def attention(Q,K,V,d,pos=0,mask=False):
     softmax_component = tf.div(tf.matmul(Q,K),tf.sqrt(d))
     
     if mask == True:
-        softmax_component = softmax_component + masks[pos-1]
+        softmax_component = softmax_component + tf_illegal_position_masks[filled-1]
         
-
     result = tf.matmul(tf.nn.dropout(tf.nn.softmax(softmax_component),keep_prob),V)
  
     return result
        
 
-def multihead_attention(Q,K,V,d,weights,pos=0,mask=False):
+def multihead_attention(Q,K,V,d,weights,filled=0,mask=False):
     
     Q_ = tf.reshape(Q,[-1,tf.shape(Q)[2]])
     K_ = tf.reshape(K,[-1,tf.shape(Q)[2]])
@@ -959,18 +1039,18 @@ def multihead_attention(Q,K,V,d,weights,pos=0,mask=False):
     
     for i in xrange(0,h):
         
-        Q_w = tf.matmul(Q_,Wq[i])
-        Q_w = tf.reshape(Q_w,[tf.shape(Q)[0],tf.shape(Q)[1],d])
+       Q_w = tf.matmul(Q_,Wq[i])
+       Q_w = tf.reshape(Q_w,[tf.shape(Q)[0],tf.shape(Q)[1],d])
         
-        K_w = tf.matmul(K_,Wk[i])
-        K_w = tf.reshape(K_w,[tf.shape(K)[0],tf.shape(K)[1],d])
+       K_w = tf.matmul(K_,Wk[i])
+       K_w = tf.reshape(K_w,[tf.shape(K)[0],tf.shape(K)[1],d])
         
-        V_w = tf.matmul(V_,Wv[i])
-        V_w = tf.reshape(V_w,[tf.shape(V)[0],tf.shape(V)[1],d])
+       V_w = tf.matmul(V_,Wv[i])
+       V_w = tf.reshape(V_w,[tf.shape(V)[0],tf.shape(V)[1],d])
 
-        head = attention(Q_w,K_w,V_w,d,pos,mask)
+       head = attention(Q_w,K_w,V_w,d,filled,mask)
             
-        heads = heads.write(i,head)
+       heads = heads.write(i,head)
         
     heads = heads.stack()
     
@@ -994,9 +1074,7 @@ More details: https://arxiv.org/pdf/1706.03762.pdf
 
 ```python
 def encoder(x,weights,attention_weights,dqkv):
-    
-    d=1024
-    
+
     W1 = weights['W1']
     W2 = weights['W2']
     b1 = weights['b1']
@@ -1007,15 +1085,25 @@ def encoder(x,weights,attention_weights,dqkv):
     scale2 = weights['scale2']
     shift2 = weights['shift2']
     
+    # SUBLAYER 1 (MASKED MULTI HEADED SELF ATTENTION)
     
     sublayer1 = multihead_attention(x,x,x,dqkv,attention_weights)
     sublayer1 = tf.nn.dropout(sublayer1,keep_prob)
     sublayer1 = layer_norm(sublayer1 + x,scale1,shift1)
     
-    sublayer1_ = tf.reshape(sublayer1,[-1,word_vec_dim])
+    sublayer1_ = tf.reshape(sublayer1,[tf.shape(sublayer1)[0],1,tf.shape(sublayer1)[1],word_vec_dim])
     
-    sublayer2 = tf.matmul(tf.nn.relu(tf.matmul(sublayer1_,W1)+b1),W2) + b2
-    sublayer2 = tf.reshape(sublayer2,tf.shape(x))
+    # SUBLAYER 2 (TWO 1x1 CONVOLUTIONAL LAYERS AKA POSITION WISE FULLY CONNECTED NETWORKS)
+    
+    sublayer2 = tf.nn.conv2d(sublayer1_, W1, strides=[1,1,1,1], padding='SAME')
+    sublayer2 = tf.nn.bias_add(sublayer2,b1)
+    sublayer2 = tf.nn.relu(sublayer2)
+    
+    sublayer2 = tf.nn.conv2d(sublayer2, W2, strides=[1,1,1,1], padding='SAME')
+    sublayer2 = tf.nn.bias_add(sublayer2,b2)
+    
+    sublayer2 = tf.reshape(sublayer2,[tf.shape(sublayer2)[0],tf.shape(sublayer2)[2],word_vec_dim])
+    
     sublayer2 = tf.nn.dropout(sublayer2,keep_prob)
     sublayer2 = layer_norm(sublayer2 + sublayer1,scale2,shift2)
     
@@ -1029,10 +1117,8 @@ More details: https://arxiv.org/pdf/1706.03762.pdf
 
 
 ```python
-def decoder(y,enc_out,weights,attention_weights_1,attention_weights_2,dqkv,mask=False,pos=0):
-    
-    d=1024
-    
+def decoder(y,enc_out,weights,masked_attention_weights,attention_weights,dqkv,mask=False,filled=0):
+
     W1 = weights['W1']
     W2 = weights['W2']
     b1 = weights['b1']
@@ -1044,112 +1130,45 @@ def decoder(y,enc_out,weights,attention_weights_1,attention_weights_2,dqkv,mask=
     shift2 = weights['shift2']
     scale3 = weights['scale3']
     shift3 = weights['shift3']
+    
+    # SUBLAYER 1 (MASKED MULTI HEADED SELF ATTENTION)
 
-    sublayer1 = multihead_attention(y,y,y,dqkv,attention_weights_1,pos,mask)
+    sublayer1 = multihead_attention(y,y,y,dqkv,masked_attention_weights,filled,mask)
     sublayer1 = tf.nn.dropout(sublayer1,keep_prob)
     sublayer1 = layer_norm(sublayer1 + y,scale1,shift1)
     
-    sublayer2 = multihead_attention(sublayer1,enc_out,enc_out,dqkv,attention_weights_2)
+    # SUBLAYER 2 (MULTIHEADED ENCODER-DECODER INTERLAYER ATTENTION)
+    
+    sublayer2 = multihead_attention(sublayer1,enc_out,enc_out,dqkv,attention_weights)
     sublayer2 = tf.nn.dropout(sublayer2,keep_prob)
     sublayer2 = layer_norm(sublayer2 + sublayer1,scale2,shift2)
     
-    sublayer2_ = tf.reshape(sublayer2,[-1,word_vec_dim])
+    # SUBLAYER 3 (TWO 1x1 CONVOLUTIONAL LAYERS AKA POSITION WISE FULLY CONNECTED NETWORKS)
     
-    sublayer3 = tf.matmul(tf.nn.relu(tf.matmul(sublayer2_,W1)+b1),W2) + b2
-    sublayer3 = tf.reshape(sublayer3,tf.shape(y))
+    sublayer2_ = tf.reshape(sublayer2,[tf.shape(sublayer2)[0],1,tf.shape(sublayer2)[1],word_vec_dim])
+    
+    sublayer3 = tf.nn.conv2d(sublayer2_, W1, strides=[1,1,1,1], padding='SAME')
+    sublayer3 = tf.nn.bias_add(sublayer3,b1)
+    sublayer3 = tf.nn.relu(sublayer3)
+    
+    sublayer3 = tf.nn.conv2d(sublayer3, W2, strides=[1,1,1,1], padding='SAME')
+    sublayer3 = tf.nn.bias_add(sublayer3,b2)
+    
+    sublayer3 = tf.reshape(sublayer3,[tf.shape(sublayer3)[0],tf.shape(sublayer3)[2],word_vec_dim])
+    
     sublayer3 = tf.nn.dropout(sublayer3,keep_prob)
     sublayer3 = layer_norm(sublayer3 + sublayer2,scale3,shift3)
     
     return sublayer3
 ```
 
-### Model Definition
-
-It follows the encoder-decoder architecture. The main exception from standard encoder-decoder paradigm, is that it uses 'transformers' instead of Reccurrent networks. 
-
-If teacher forcing is True, the decoder is made to guess the next output from the previous words in the actual target output, else the decoder predicts the next output from the previously predicted output of the decoder.
-
-Details about the model: https://arxiv.org/pdf/1706.03762.pdf
+### Function for Stacking Encoders.
 
 
 ```python
-def fn1(out_prob_dist,tf_embd):
-    out_index = tf.cast(tf.argmax(out_prob_dist,1),tf.int32)
-    return tf.gather(tf_embd,out_index)
-
-def fn2_1(output,out_prob_dist):
-    return output,tf.constant(1),tf.reshape(out_prob_dist,[tf.shape(x)[0],1,vocab_len])
-
-def fn2_2(decoderin_part1,output,filled,out_probs,out_prob_dist):
-    decoderin_part1 = tf.concat([decoderin_part1,output],1)
-    filled += 1
-    out_probs = tf.concat([out_probs,tf.reshape(out_prob_dist,[tf.shape(x)[0],1,vocab_len])],1)
-    return decoderin_part1,filled,out_probs
+def stacked_encoders(layer_num,encoderin):
     
-def model(x,y,teacher_forcing=True):
-    
-    #dimensions for Q,K and V for attention layers. 
-    dqkv = 32 
-    
-    #Parameters for attention sub-layers for all n encoders
-    Wq_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wk_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wv_enc = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wo_enc = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
-    
-    #Parameters for fully connected layers for n encoders
-    d = 1024
-    W1_enc = tf.Variable(tf.truncated_normal(shape=[N,word_vec_dim,d],stddev=0.01))
-    b1_enc = tf.Variable(tf.truncated_normal(shape=[N,1,d],stddev=0.01))
-    W2_enc = tf.Variable(tf.truncated_normal(shape=[N,d,word_vec_dim],stddev=0.01))
-    b2_enc = tf.Variable(tf.truncated_normal(shape=[N,1,word_vec_dim],stddev=0.01))
-    
-    #Parameters for 2 attention sub-layers for all n decoders
-    Wq_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wk_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wv_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wo_dec_1 = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
-    Wq_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wk_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wv_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h,word_vec_dim,dqkv],stddev=0.01))
-    Wo_dec_2 = tf.Variable(tf.truncated_normal(shape=[N,h*dqkv,word_vec_dim],stddev=0.01))
-    
-    #Parameters for fully connected layers for n decoders
-    d = 1024
-    W1_dec = tf.Variable(tf.truncated_normal(shape=[N,word_vec_dim,d],stddev=0.01))
-    b1_dec = tf.Variable(tf.truncated_normal(shape=[N,1,d],stddev=0.01))
-    W2_dec = tf.Variable(tf.truncated_normal(shape=[N,d,word_vec_dim],stddev=0.01))
-    b2_dec = tf.Variable(tf.truncated_normal(shape=[N,1,word_vec_dim],stddev=0.01))
-    
-    #Layer Normalization parameters for encoder and decoder   
-    scale_enc_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_enc_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    scale_enc_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_enc_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_1 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_2 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    scale_dec_3 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    shift_dec_3 = tf.Variable(tf.ones([N,1,1,word_vec_dim]),dtype=tf.float32)
-    
-    #Parameters for the linear layers converting decoder output to probability distibutions.   
-    d=1024
-    Wpd1 = tf.Variable(tf.truncated_normal(shape=[max_len*word_vec_dim,d],stddev=0.01))
-    bpd1 = tf.Variable(tf.truncated_normal(shape=[1,d],stddev=0.01))
-    Wpd2 = tf.Variable(tf.truncated_normal(shape=[d,vocab_len],stddev=0.01))
-    bpd2 = tf.Variable(tf.truncated_normal(shape=[1,vocab_len],stddev=0.01))
-                         
-    encoderin = x #should be already positionally encoded 
-    encoderin = tf.nn.dropout(encoderin,keep_prob)
-    
-    #all position encodings for outputs
-    pe_out = tf.constant(positional_encoding(max_len,word_vec_dim)) 
-    pe_out = tf.reshape(pe_out,[max_len,1,word_vec_dim])
-    
-    #encoder layers
-    
-    for i in xrange(0,N):
+    for i in xrange(0,layer_num):
         
         encoder_weights = {
             
@@ -1172,116 +1191,189 @@ def model(x,y,teacher_forcing=True):
         }
         
         encoderin = encoder(encoderin,encoder_weights,attention_weights,dqkv)
+    
+    return encoderin
+    
+```
+
+### Function for Stacking Decoders.
+
+
+```python
+def stacked_decoders(layer_num,decoderin,encoderout,filled):
+    
+    for j in xrange(0,layer_num):
         
-    encoderout = encoderin
+        decoder_weights = {
+            
+            'W1': W1_dec[j],
+            'W2': W2_dec[j],
+            'b1': b1_dec[j],
+            'b2': b2_dec[j],
+            'scale1': scale_dec_1[j],
+            'shift1': shift_dec_1[j],
+            'scale2': scale_dec_2[j],
+            'shift2': shift_dec_2[j],
+            'scale3': scale_dec_3[j],
+            'shift3': shift_dec_3[j],
+        }
+            
+        masked_attention_weights = {
+            
+            'Wq': Wq_dec_1[j],
+            'Wk': Wk_dec_1[j],
+            'Wv': Wv_dec_1[j],
+            'Wo': Wo_dec_1[j],                       
+        }
+        
+        attention_weights = {
+            
+            'Wq': Wq_dec_2[j],
+            'Wk': Wk_dec_2[j],
+            'Wv': Wv_dec_2[j],
+            'Wo': Wo_dec_2[j],                       
+        }
+            
+        decoderin = decoder(decoderin,encoderout,
+                            decoder_weights,
+                            masked_attention_weights,
+                            attention_weights,
+                            dqkv,
+                            mask=True,filled=filled)
+    return decoderin
     
-    #decoder_layers
+```
+
+### predicted_embedding():
+
+Given a probability distribution and an embedding matrix, this function returns the embedding of the word with the maximum probability in the given distribution.
+
+### replaceSOS():
+
+SOS signifies the start of sentence for the decoder. Also often represented as 'GO'. I am using an all ones vector as the first decoder input token. 
+In the next time step, the SOS will be forgotten, and only the context of the previously predicted output (or the target output at the previous timestep, if teacher forcing is on) will be used.
+
+### add_pred_to_output_lists():
+
+This function will concatenate the last predicted output into a tensor of concatenated sequence of output tokens. 
+
+
+```python
+def predicted_embedding(out_prob_dist,tf_embd):
+    out_index = tf.cast(tf.argmax(out_prob_dist,1),tf.int32)
+    return tf.gather(tf_embd,out_index)
+
+def replaceSOS(output,out_prob_dist):
+    return output,tf.constant(1),tf.reshape(out_prob_dist,[tf.shape(x)[0],1,vocab_len])
+
+def add_pred_to_output_list(decoderin_part_1,output,filled,out_probs,out_prob_dist):
+    decoderin_part_1 = tf.concat([decoderin_part_1,output],1)
+    filled += 1
+    out_probs = tf.concat([out_probs,tf.reshape(out_prob_dist,[tf.shape(x)[0],1,vocab_len])],1)
+    return decoderin_part_1,filled,out_probs
+```
+
+### Model Definition
+
+It follows the encoder-decoder paradigm. The main exception from standard encoder-decoder paradigm, is that it uses 'transformers' instead of Reccurrent networks. The decoder undergoes a sequential processing, though. 
+
+If teacher forcing is True, the decoder is made to guess the next output from the previous words in the actual target output, else the decoder predicts the next output from the previously predicted output of the decoder.
+
+Details about the model: https://arxiv.org/pdf/1706.03762.pdf
+
+
+```python
+def model(x,y,teacher_forcing=True):
     
-    #tf.shape(x)[0] == batch_size
+        
+    # NOTE: tf.shape(x)[0] == batch_size
     
-    decoderin_part1 = tf.ones([tf.shape(x)[0],1,word_vec_dim],dtype=tf.float32)
-    filled = tf.constant(1) #no. of output words that are filled
+    encoderin = x # (should be already positionally encoded) 
+    encoderin = tf.nn.dropout(encoderin,keep_prob)
+
+    
+    # ENCODER LAYERS
+
+    encoderout = stacked_encoders(N,encoderin)
+    
+
+    # DECODER LAYERS
+
+    decoderin_part_1 = tf.ones([tf.shape(x)[0],1,word_vec_dim],dtype=tf.float32) #represents SOS
+    
+    filled = tf.constant(1) 
+    # no. of output words that are filled i.e already predicted - are stored in 'filled'
+    # filled value is used to retrieve appropriate mask for illegal positions. 
+    
     
     tf_embd = tf.convert_to_tensor(np_embedding_beng)
+    Wpd = tf.transpose(tf_embd)
+    # Wpd the transpose of the output embedding matrix will be used to convert the decoder output
+    # into a probability distribution over the output language vocabulary. 
     
     out_probs = tf.zeros([tf.shape(x)[0],output_len,vocab_len],tf.float32)
+    # out_probs will contain the list of probability distributions.
 
     #tf_while_loop since output_len will be dynamically defined during session run
     
     i=tf.constant(0)
     
-    def cond(i,filled,decoderin_part1,out_probs):
+    def cond(i,filled,decoderin_part_1,out_probs):
         return i<output_len
     
-    def body(i,filled,decoderin_part1,out_probs):
+    def body(i,filled,decoderin_part_1,out_probs):
         
-        decoderin_part2 = tf.zeros([tf.shape(x)[0],(max_len-filled),word_vec_dim],dtype=tf.float32)
-        decoderin = tf.concat([decoderin_part1,decoderin_part2],1)
+        decoderin_part_2 = tf.zeros([tf.shape(x)[0],(output_len-filled),word_vec_dim],dtype=tf.float32)
+        
+        decoderin = tf.concat([decoderin_part_1,decoderin_part_2],1)
+        
         decoderin = tf.nn.dropout(decoderin,keep_prob)
         
-        for j in xrange(0,N):
-            
-            decoder_weights = {
-                
-                'W1': W1_dec[j],
-                'W2': W2_dec[j],
-                'b1': b1_dec[j],
-                'b2': b2_dec[j],
-                'scale1': scale_dec_1[j],
-                'shift1': shift_dec_1[j],
-                'scale2': scale_dec_2[j],
-                'shift2': shift_dec_2[j],
-                'scale3': scale_dec_3[j],
-                'shift3': shift_dec_3[j],
-            }
-            
-            attention_weights_1 = {
-                
-                'Wq': Wq_dec_1[j],
-                'Wk': Wk_dec_1[j],
-                'Wv': Wv_dec_1[j],
-                'Wo': Wo_dec_1[j],                       
-             }
-            
-            attention_weights_2 = {
-                
-                'Wq': Wq_dec_2[j],
-                'Wk': Wk_dec_2[j],
-                'Wv': Wv_dec_2[j],
-                'Wo': Wo_dec_2[j],                       
-             }
-            
-            decoderin = decoder(decoderin,encoderout,
-                                decoder_weights,
-                                attention_weights_1,
-                                attention_weights_2,
-                                dqkv,
-                                mask=True,pos=filled)
-            
-        decoderout = decoderin
-        #decoderout shape = batch_size x seq_len x word_vec_dim
+        decoderout = stacked_decoders(N,decoderin,encoderout,filled)
         
-        #converting to probability distributions
-        decoderout = tf.reshape(decoderout,[tf.shape(x)[0],max_len*word_vec_dim])
+        # decoderout shape (now) = batch_size x seq_len x word_vec_dim
+
+        decoderout = tf.reduce_sum(decoderout,1) 
+        # A weighted summation of the attended decoder input
+        # decoderout shape (now) = batch_size x word_vec_dim
         
-        # A two fully connected feed forward layer for transforming dimensions
-        # (onverting to probability distributions)
+        # converting decoderout to probability distributions
         
-        out_prob_dist = tf.nn.relu(tf.matmul(decoderout,Wpd1)+bpd1)
-        out_prob_dist = tf.matmul(out_prob_dist,Wpd2)+bpd2
-        out_prob_dist = tf.reshape(out_prob_dist,[tf.shape(x)[0],vocab_len])
+        out_prob_dist = tf.matmul(decoderout,Wpd)
    
-        # if teacher forcing is false, initiate fn1(). It guesses the output embeddings
-        # to be those whose vocabulary index has maximum probability in out_prob_dist
+        # If teacher forcing is false, initiate predicted_embedding(). It guesses the output embeddings
+        # to be that whose vocabulary index has maximum probability in out_prob_dist
         # (the current output probability distribution). The embedding is used in the next
         # iteration. 
         
-        # if teacher forcing is true, use the embedding of target index from y for the next 
-        # iteration.
+        # If teacher forcing is true, use the embedding of target index from y (laebls) 
+        # for the next iteration.
         
         output = tf.cond(tf.equal(teacher_forcing,tf.convert_to_tensor(False)),
-                         lambda: fn1(out_prob_dist,tf_embd),
+                         lambda: predicted_embedding(out_prob_dist,tf_embd),
                          lambda: tf.gather(tf_embd,y[:,i]))
         
         # Position Encoding the output
-        output = output + pe_out[i]
+        
+        output = output + tf_pe_out[i]
         output = tf.reshape(output,[tf.shape(x)[0],1,word_vec_dim])
                                 
         
-        #concatenate with previous batch_outputs
-        decoderin_part1,filled,out_probs = tf.cond(tf.equal(i,0),
-                                        lambda:fn2_1(output,out_prob_dist),
-                                        lambda:fn2_2(decoderin_part1,output,filled,out_probs,out_prob_dist))
+        #concatenate with list of previous predicted output tokens
         
-        return i+1,filled,decoderin_part1,out_probs
+        decoderin_part_1,filled,out_probs = tf.cond(tf.equal(i,0),
+                                        lambda:replaceSOS(output,out_prob_dist),
+                                        lambda:add_pred_to_output_list(decoderin_part_1,output,filled,out_probs,out_prob_dist))
+        
+        return i+1,filled,decoderin_part_1,out_probs
             
-    _,_,_,out_probs = tf.while_loop(cond,body,[i,filled,decoderin_part1,out_probs],
+    _,_,_,out_probs = tf.while_loop(cond,body,[i,filled,decoderin_part_1,out_probs],
                       shape_invariants=[i.get_shape(),
                                         filled.get_shape(),
                                         tf.TensorShape([None,None,word_vec_dim]),
                                         tf.TensorShape([None,None,vocab_len])])
 
-    return out_probs          
+    return out_probs
 ```
 
 ### Setting up cost function and optimizer
@@ -1294,7 +1386,7 @@ output = model(x,y,teacher_forcing)
 #OPTIMIZER
 
 cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output, labels=y)
-cost = tf.multiply(cost,tf_mask) #mask used to remove loss effect due to PADS
+cost = tf.multiply(cost,tf_pad_mask) #mask used to remove loss effect due to PADS
 cost = tf.reduce_mean(cost)
 
 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate,beta1=0.9,beta2=0.98,epsilon=1e-9).minimize(cost)
@@ -1311,14 +1403,14 @@ softmax_output = tf.nn.softmax(output)
 
 ```
 
-### Function to create a Mask (to 'mask' the effect of PADs in the target sequence)
+### Function to create a Mask for effect of PADs on cost
 
-The mask will have the same shape as the batch of target sequences (sequence of indices of target Bengali words in Bengali vocabulary) but with the value 0 wherever there is an index corresponding to a PAD. 
-The mask will be multipled to the cost (before its averaged), so that any position in the cost tensor that is effected by the pad will be multiplied by 0. This way, the effect of PADs (which we don't need to care about- Only the position of EOS is important) on the cost (and therefore on the gradients) can be nullified. 
+The mask will have the same shape as the batch of labels but with the value 0 wherever there is a PAD.
+The mask will be element-wise multipled to the cost (before its averaged), so that any position in the cost tensor that is effected by the PAD will be multiplied by 0. This way, the effect of PADs (which we don't need to care about) on the cost (and therefore on the gradients) can be nullified. 
 
 
 ```python
-def create_Mask(output_batch):
+def create_pad_Mask(output_batch):
     pad_index = vocab_beng.index('<PAD>')
     mask = np.ones_like((output_batch),np.float32)
     for i in xrange(len(mask)):
@@ -1331,27 +1423,7 @@ def create_Mask(output_batch):
 ### Training .....
 
 The input batch is positionally encoded before its fed to the network.
-Using RNG to determine if the iteration through the network will use Teacher Forcing or not. 
 
-
-Some comments:
-
-The dataset may not have enough samples for proper training. 
-
-The output contains too many repitition if I take the greedy approach of "argmax(output probability distribution)".
-
-
-(Same experience with the other transformer model I used for abstractive summarization)
-
-Choosing an output word randomly based on its probability in the probability distribution, does brings some variety, but that's just a cheap workaround.
-
-I don't know if beam search will significantly improve anything. 
-
-Training doesn't look any good. But may require better dataset, with more examples, and much longer training to put out something good. 
-
-For now, this is just a toy implementation.
-
-I will not be completing the training for now. So, I will not be setting up validation and testing either. But that can be done later. No evaluation metrics used for now either. I may think of it, if I intend to seriously train and investigate this later. 
 
 ```python
 import string
@@ -1368,19 +1440,24 @@ with tf.Session() as sess: # Start Tensorflow Session
     step = 0   
     best_loss = 999
     display_step = 1
+    warm_up_steps = 7000
     
-    while step < iters:
-           
+    while step < epochs:
+        
         batch_len = len(train_batch_x)
         shuffled_indices = np.arange(batch_len)
         np.random.shuffle(shuffled_indices)
         
         for i in xrange(0,batch_len):
             
+            # Adaptive learning rate formula
+            #learning_rate = ((word_vec_dim)**(-0.5))*min((step*batch_len+i+1)**(-0.5),(step*batch_len+i+1)*warm_up_steps**(-1.5))
+
             sample_no = np.random.randint(0,len(train_batch_x[0]))
             print("\nCHOSEN SAMPLE NO.: "+str(sample_no))
             
             if i%display_step==0:
+                
                 print("\nEpoch: "+str(step+1)+" Iteration: "+str(i+1))
                 print("\nSAMPLE TEXT:")
                 for vec in train_batch_x[shuffled_indices[i]][sample_no]:
@@ -1388,10 +1465,19 @@ with tf.Session() as sess: # Start Tensorflow Session
                 print("\n")
                 
             input_seq_len = len(train_batch_x[shuffled_indices[i]][0])
+            
             pe_in = positional_encoding(input_seq_len,word_vec_dim)
             pe_in = pe_in.reshape((1,input_seq_len,word_vec_dim))
             
-            #print(train_batch_y[shuffled_indices[i]].shape)
+            output_seq_len = len(train_batch_y[shuffled_indices[i]][0])
+            
+            
+            
+            illegal_position_masks = generate_masks_for_illegal_positions(output_seq_len)
+            
+            pe_out = positional_encoding(output_seq_len,word_vec_dim)
+            pe_out = pe_out.reshape((output_seq_len,1,word_vec_dim))
+    
             
             rand = random.randint(0,2) #determines chance of using Teacher Forcing
             if rand==1:
@@ -1399,7 +1485,7 @@ with tf.Session() as sess: # Start Tensorflow Session
             else:
                 random_bool = False
             
-            mask = create_Mask(train_batch_y[shuffled_indices[i]])
+            pad_mask = create_pad_Mask(train_batch_y[shuffled_indices[i]])
             
             # Run optimization operation (backpropagation)
             _,loss,out = sess.run([optimizer,cost,softmax_output],
@@ -1407,20 +1493,24 @@ with tf.Session() as sess: # Start Tensorflow Session
                                              y: train_batch_y[shuffled_indices[i]],
                                              keep_prob: 0.9,
                                              output_len: len(train_batch_y[shuffled_indices[i]][0]),
-                                             tf_mask: mask,
-                                             teacher_forcing: random_bool
+                                             tf_pad_mask: pad_mask,
+                                             tf_illegal_position_masks: illegal_position_masks,
+                                             tf_pe_out: pe_out,
+                                             teacher_forcing: False #random_bool
+                                             # feed random bool for randomized teacher forcing. 
                                              })
             
             if i%display_step==0:
+                
                 print("\nPREDICTED TRANSLATION OF THE SAMPLE:\n")
                 flag = 0
                 for array in out[sample_no]:
                     
-                    prediction_int = np.random.choice(range(vocab_len), p=array.ravel()) 
+                    #prediction_int = np.random.choice(range(vocab_len), p=array.ravel()) 
                     #(^use this if you want some variety)
                     #(or use this what's below:)
                     
-                    #prediction_int = np.argmax(array)
+                    prediction_int = np.argmax(array)
                     
                     if vocab_beng[prediction_int] in string.punctuation or flag==0: 
                         print(vocab_beng[prediction_int],end='')
@@ -1438,2519 +1528,534 @@ with tf.Session() as sess: # Start Tensorflow Session
                   
             if(loss<best_loss):
                 best_loss = loss
-                saver.save(sess, 'Model_Backup/translatipn_model.ckpt')
+                saver.save(sess, 'Model_Backup/translation_model.ckpt')
 
         step=step+1
     
 ```
 
     
-    CHOSEN SAMPLE NO.: 43
+    CHOSEN SAMPLE NO.: 29
     
     Epoch: 1 Iteration: 1
     
     SAMPLE TEXT:
-    can i eat <EOS> 
+    he is having lunch now <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    বেডিযে বলছে ঠিকানাটা পালান নিস।
+    দেখছে দেখছে দেখছে দেখছে দেখছে দেখছে দেখছে দেখছে দেখছে
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি কি খেতে পারি <EOS> 
+    তিনি এখন লাঞচ করছেন। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=6.56739
+    loss=297.772
     
-    CHOSEN SAMPLE NO.: 6
+    CHOSEN SAMPLE NO.: 0
     
     Epoch: 1 Iteration: 2
     
     SAMPLE TEXT:
-    the terrorists released the hostages <EOS> 
+    they have got guns <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
+    ঠিকানাটা ঠিকানাটা ঠিকানাটা ঠিকানাটা ঠিকানাটা ঠিকানাটা ঠিকানাটা ঠিকানাটা
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আতঙকবাদীরা বনদিদের ছেডে দিলো। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    ওদের কাছে বনদক রযেছে। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=161.808
+    loss=242.409
     
-    CHOSEN SAMPLE NO.: 57
+    CHOSEN SAMPLE NO.: 55
     
     Epoch: 1 Iteration: 3
     
     SAMPLE TEXT:
-    when is the museum open <EOS> 
+    it seems that i have lost my keys <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    কে কে কে কে কে এখানে কে কে এটা
+    তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি তারাতারি
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    জাদঘরটা কখন খোলা থাকে <EOS> <PAD> <PAD> <PAD> <PAD> 
+    মনে হচছে আমি আমার চাবি হারিযে ফেলেছি। <EOS> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=101.757
+    loss=358.392
+    .
+    .
+    .
+    .
+        CHOSEN SAMPLE NO.: 20
     
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 1 Iteration: 4
+    Epoch: 128 Iteration: 44
     
     SAMPLE TEXT:
-    would you like to come fishing with us <EOS> <PAD> 
+    she knows where we live <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি আমি
+    উনি জানে আমরা কোথায থাকি। <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তমি কি আমাদের সাথে মাছ ধরতে যাবে <EOS> <PAD> <PAD> <PAD> <PAD> 
+    তিনি জানেন আমরা কোথায থাকি। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=59.2156
-    
-    CHOSEN SAMPLE NO.: 38
-    
-    Epoch: 1 Iteration: 5
-    
-    SAMPLE TEXT:
-    i 'm not at all tired <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমরা আমরা আমরা আমরা আমরা আমরা আমরা আমরা টম টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি একদমই কলানত নই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=39.9769
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 1 Iteration: 6
-    
-    SAMPLE TEXT:
-    i believe tom is doing well <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আপনার তমি আপনার কথা আপনার আপনার আপনার আপনার কি আপনার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার মনে হয টম ভালোই আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=15.8207
-    
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 1 Iteration: 7
-    
-    SAMPLE TEXT:
-    i teach english <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার <EOS> আমার <EOS> <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ইংরাজি পডাই। <EOS> <PAD> <PAD> 
-    
-    loss=14.7499
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 1 Iteration: 8
-    
-    SAMPLE TEXT:
-    are you all ready <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমাকে সেই আছে না। আছে গত গত সেই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনারা সবাই তৈরী <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=7.61839
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 1 Iteration: 9
-    
-    SAMPLE TEXT:
-    tom certainly is not as smart as mary thinks he is <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আর আপনাকে মধযে জনয গানে খজে ভাষায একবার তোমাকে করা অনগরহ তাডাতাডি যাচছি। টমের আপনি <EOS> তোমাকে হবে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম অতটা বদধিমান নয যতটা মেরি মনে করে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=6.53
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 1 Iteration: 10
-    
-    SAMPLE TEXT:
-    eat whatever food you like <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হচছে মা পেল। নোংরা বল বিভিনন আছে পার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার যে খাবার পছনদ হয সেটা খান। <EOS> 
-    
-    loss=5.36857
-    
-    CHOSEN SAMPLE NO.: 7
-    
-    Epoch: 1 Iteration: 11
-    
-    SAMPLE TEXT:
-    tom started coughing <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ডাউনলোড অনধকারকে করে বডো তিকত
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কাশতে শর করলো। <EOS> 
-    
-    loss=6.17964
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 1 Iteration: 12
-    
-    SAMPLE TEXT:
-    i have two nieces <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ধরতে বডো থেকে পারছি বাজে টপিটা যাব। একজন
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার দটো ভাগনী আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.67193
+    loss=1.27356
     
     CHOSEN SAMPLE NO.: 28
     
-    Epoch: 1 Iteration: 13
+    Epoch: 128 Iteration: 45
     
     SAMPLE TEXT:
-    he speaks french <EOS> <PAD> 
+    tom 's strong <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আইন। mp3 ফরাসিতে যেতে শতর আমাদের
+    টম শকতিশালী। <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    সে ফরাসিতে কথা বলে। <EOS> <PAD> 
+    টম শকতিশালী। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=5.45646
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 1 Iteration: 14
-    
-    SAMPLE TEXT:
-    i made it myself <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বিকলপ। খোলামেলা। ওখানে পারি। গেছে। ভলবেন বসটনে করলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এটা নিজে নিজে বানিযেছি। <EOS> <PAD> <PAD> 
-    
-    loss=4.58858
-    
-    CHOSEN SAMPLE NO.: 28
-    
-    Epoch: 1 Iteration: 15
-    
-    SAMPLE TEXT:
-    i saw him running <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বারতাটা আপলোড আছেন করার হবে। এটাই ঘর পছনদ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওনাকে দৌডাতে দেখেছিলাম। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.58135
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 1 Iteration: 16
-    
-    SAMPLE TEXT:
-    tom certainly is eloquent <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সতয। শেষের নাম ও মীমাংসাযোগয। চেচালো। চডানতভাবে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম সতযি বাকযবাগীশ। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.80474
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 1 Iteration: 17
-    
-    SAMPLE TEXT:
-    we lost <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চাও ভরকটি কাচা খেলতাম। সমভাবনা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা হেরে গেছি। <EOS> <PAD> 
-    
-    loss=5.18577
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 1 Iteration: 18
-    
-    SAMPLE TEXT:
-    i 'd like to check out tomorrow morning <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমি উনি হবে। বাডিটাকে সঠিক। আছে পারে। ছিলাম। বাডিটাকে আমি দেখতে মারলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কাল সকালে ঘরটা ছেরে দিতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.59181
-    
-    CHOSEN SAMPLE NO.: 23
-    
-    Epoch: 1 Iteration: 19
-    
-    SAMPLE TEXT:
-    you look sick <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থেকেই কমান। দিন। সে টম বসটনে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনাকে অসসথ বলে মনে হচছে। <EOS> 
-    
-    loss=4.68394
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 1 Iteration: 20
-    
-    SAMPLE TEXT:
-    i give you my word <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করলো। বঝতে এক ভালোবাসে। গরতবপরণ। বযরথ পডল। পালটে আমাকে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তোমাকে কথা দিলাম। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.33229
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 1 Iteration: 21
-    
-    SAMPLE TEXT:
-    keep quiet <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ছটির ওকে পারবেন বেডাতে টেপ এনো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    চপ করো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.41801
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 1 Iteration: 22
-    
-    SAMPLE TEXT:
-    what team does tom play for <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    অসবিধা যাক। থাকাটাও বষটি জিরোচছি। শানত আমাকে তেষটা বডো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম কোন দলের হযে খেলে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=5.15387
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 1 Iteration: 23
-    
-    SAMPLE TEXT:
-    tom now knows everything <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ঘরটা আমি ভাষা ঠিক কাজ পারব বসো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম এখন সবকিছই জানে। <EOS> <PAD> <PAD> 
-    
-    loss=4.64027
-    
-    CHOSEN SAMPLE NO.: 25
-    
-    Epoch: 1 Iteration: 24
-    
-    SAMPLE TEXT:
-    you ought to ask him for advice <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার কি খব পরেছিস দিন। খায সেটা তমি আমরা আমার করছে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার তাকে পরামরশের জনয জিজঞাসা করা উচিৎ। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.74578
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 1 Iteration: 25
-    
-    SAMPLE TEXT:
-    the baby is screaming <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তোদের এসেছিলো। বাজে। পালটিও আটটার একবার দিশেহারা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাচচাটা চেচাচছে। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.48393
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 1 Iteration: 26
-    
-    SAMPLE TEXT:
-    tom has decided to keep a diary <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ওনার যেত আপনি নিরবাচিত বযসত। টম পেছনে কি নিযে ফরাসি সতরী।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম একটা ডাইরি রাখার কথা ঠিক করেছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.51531
-    
-    CHOSEN SAMPLE NO.: 28
-    
-    Epoch: 1 Iteration: 27
-    
-    SAMPLE TEXT:
-    i drink beer <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এই উচিৎ। কি ধনী। বাডিতে শোনো। না।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বিযার খাই। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.85868
-    
-    CHOSEN SAMPLE NO.: 42
-    
-    Epoch: 1 Iteration: 28
-    
-    SAMPLE TEXT:
-    sit down <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থেকে আমার আমি না। আমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বসো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.48524
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 1 Iteration: 29
-    
-    SAMPLE TEXT:
-    tom used to play guitar <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পাযনি। সমভব চকোলেট পডলো এটা আমি আরমভ ঠিক পেলো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম গীটার বাজাতো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.00684
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 1 Iteration: 30
-    
-    SAMPLE TEXT:
-    you may swim <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিযেছে। কে দেখে আপনি সপারিশ ফরাসি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সাতার কাটতে পারেন। <EOS> <PAD> <PAD> 
-    
-    loss=3.85715
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 1 Iteration: 31
-    
-    SAMPLE TEXT:
-    do you live in this neighborhood <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চেষটা আমি উনি টম সঙগে ভাষায ফোন বনধ কী
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি এই পাডাতেই থাকো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.90109
-    
-    CHOSEN SAMPLE NO.: 54
-    
-    Epoch: 1 Iteration: 32
-    
-    SAMPLE TEXT:
-    take tom to the hospital <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কেযার গরবিত রাখব। পছনদ। পারে। ধান উদবিগন বলন। চাবি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টমকে হাসপাতালে নিযে যাও। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.01311
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 1 Iteration: 33
-    
-    SAMPLE TEXT:
-    may i have your phone number <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সকতলা আকরষণীয সামলাতে গরতবপরণ হযে যা আমার জতো উনি না
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি কি আপনার ফোন নামবারটি পেতে পারি <EOS> <PAD> <PAD> 
-    
-    loss=4.25953
-    
-    CHOSEN SAMPLE NO.: 21
-    
-    Epoch: 1 Iteration: 34
-    
-    SAMPLE TEXT:
-    do you understand what i 'm saying <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> আমার <EOS> <EOS> <EOS> বাইকটা এই দেবো। এই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি যা বলছি আপনি কি তা বঝতে পারছেন <EOS> <PAD> 
-    
-    loss=4.64283
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 1 Iteration: 35
-    
-    SAMPLE TEXT:
-    do you live here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    করতে পারেন। কোথায <EOS> সি তারা না। এটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি কি এখানে থাকেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.70672
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 1 Iteration: 36
-    
-    SAMPLE TEXT:
-    that is because you are a girl <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সে নই। বোন। আমরা দিলাম। বলে ফরাসিতে আমি চাই হচচে। গেছে কোথা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তার কারণ তই একজন মেযে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.65005
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 1 Iteration: 37
-    
-    SAMPLE TEXT:
-    tom rides a scooter <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থেকে এটা কফি কত ঠিকমতো তিনি আমাকে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম সকটার চডে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.16478
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 1 Iteration: 38
-    
-    SAMPLE TEXT:
-    i came back <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বসটনে পডাতে সাথে এসেছিলো। পারব দাতের
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ফিরে এলাম। <EOS> <PAD> <PAD> 
-    
-    loss=3.98497
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 1 Iteration: 39
-    
-    SAMPLE TEXT:
-    how are you did you have a good trip <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বযসত। পারি খশি <EOS> ওনাকে বাকযাংশটির খাচছেন। <EOS> দযা আমার সহজেই বরফ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কেমন আছেন যাতরা ভালো ছিল তো <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=5.24832
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 1 Iteration: 40
-    
-    SAMPLE TEXT:
-    do not cry <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হাসলো সাবধানে খলন লাল অংশে ওই খেযেছো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কেদো না। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.94055
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 1 Iteration: 41
-    
-    SAMPLE TEXT:
-    she is asking how that is possible <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কাশতে সকতলা দেখেছি। পারবেন বানাতে কোথা করন যেতে সংজত দৌডান। মনোযোগ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উনি জিজঞাসা করছেন এটা কি করে সমভব। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.07073
-    
-    CHOSEN SAMPLE NO.: 44
-    
-    Epoch: 1 Iteration: 42
-    
-    SAMPLE TEXT:
-    tom knew <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ওটা <EOS> থেকে চেচালো। যা টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম জানতো। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.41441
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 1 Iteration: 43
-    
-    SAMPLE TEXT:
-    tom laughed <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আমার বলতে আমি <EOS> কি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম হাসলো। <EOS> <PAD> <PAD> 
-    
-    loss=4.00027
-    
-    CHOSEN SAMPLE NO.: 27
-    
-    Epoch: 1 Iteration: 44
-    
-    SAMPLE TEXT:
-    eat anything you like <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    রাখতে খান মেরি <EOS> আর হাটে। <EOS> চিৎকার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার যা কিছ পছনদ হয তাই খান। <EOS> 
-    
-    loss=3.86403
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 1 Iteration: 45
-    
-    SAMPLE TEXT:
-    close the door when you leave <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কাদছিলো। রহসয বল বলতে তোমার কষমাপরারথনা দাও। খান আমরা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বেডোবার সময দরজাটা বনধ করে দিও। <EOS> <PAD> <PAD> 
-    
-    loss=4.40852
-    
-    CHOSEN SAMPLE NO.: 41
-    
-    Epoch: 1 Iteration: 46
-    
-    SAMPLE TEXT:
-    did you read it all <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বঝি। পডন। ছাডন। ওদের আছো আছো এমনিতে খেলি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কি পরোটা পরেছো <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.93985
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 1 Iteration: 47
-    
-    SAMPLE TEXT:
-    listen carefully <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাডিটা ও <EOS> ভালো এটা বলেছিল
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মন দিযে শনবে। <EOS> <PAD> <PAD> 
-    
-    loss=3.44873
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 1 Iteration: 48
-    
-    SAMPLE TEXT:
-    tom has won many races <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম অনেক দৌড জিতেছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.87674
-    
-    CHOSEN SAMPLE NO.: 4
-    
-    Epoch: 1 Iteration: 49
-    
-    SAMPLE TEXT:
-    call the police <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> সবাই তারা <EOS> ভলে বোঝে সেটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    পলিশ ডাকো <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.42726
-    
-    CHOSEN SAMPLE NO.: 20
-    
-    Epoch: 1 Iteration: 50
-    
-    SAMPLE TEXT:
-    this is not important <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থাকতে চান ঘোডায কাল বিবাহবিচছেদ পারে। সতরী। খাবো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটি গরতবপরণ না। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.79798
-    
-    CHOSEN SAMPLE NO.: 15
-    
-    Epoch: 1 Iteration: 51
-    
-    SAMPLE TEXT:
-    i would like to be a pilot in the future <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যান। আমরা অংশে গেছিলাম। গাছটা এখন পারছি দাডাও। আমি করো। কিনলাম। ভেবছিলাম আমি ইনি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ভবিষযতে পাইলট হতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.60735
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 2 Iteration: 1
-    
-    SAMPLE TEXT:
-    you should apologize <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কেমন কর। দেখবো। গেছি ছিলে গেছিলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার কষমা চাওযা উচিৎ। <EOS> <PAD> 
-    
-    loss=3.6305
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 2 Iteration: 2
-    
-    SAMPLE TEXT:
-    you called <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ধরন। কী জাপানি সে সবাই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি ডেকেছিলে <EOS> <PAD> <PAD> 
-    
-    loss=3.72863
-    
-    CHOSEN SAMPLE NO.: 34
-    
-    Epoch: 2 Iteration: 3
-    
-    SAMPLE TEXT:
-    i saw mary sitting in front of a mirror brushing her hair <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> <EOS> <EOS> তিনি <EOS> <EOS> <EOS> <EOS> <EOS> তোমরা ভালো <EOS> <EOS> <EOS> কর। <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মেরিকে আযনার সামনে বসে চল আচডাতে দেখলাম। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=6.1713
-    
-    CHOSEN SAMPLE NO.: 10
-    
-    Epoch: 2 Iteration: 4
-    
-    SAMPLE TEXT:
-    i was alone <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দেখে <EOS> টম অকটোবর। কেউ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি একা ছিলাম। <EOS> <PAD> 
-    
-    loss=4.39774
-    
-    CHOSEN SAMPLE NO.: 46
-    
-    Epoch: 2 Iteration: 5
-    
-    SAMPLE TEXT:
-    take us there <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম উপনযাস খায ওটা মানষ। আপনার মগ।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাদের ওখানে নিযে চলো। <EOS> <PAD> <PAD> 
-    
-    loss=3.59155
-    
-    CHOSEN SAMPLE NO.: 31
-    
-    Epoch: 2 Iteration: 6
-    
-    SAMPLE TEXT:
-    i just want tom to be happy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এখানে। গেছিলাম। আছেন। টম <EOS> ওনারা চাইছি কটার পারো কিনতে তোমরা মেযে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি খালি চাই টম সখে থাকক। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.63375
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 7
-    
-    SAMPLE TEXT:
-    i would like an air-conditioned room <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বারতাটা <EOS> <EOS> না। না। আসন। চেডে সকালে <EOS> টম যাচছি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার একটী শীততাপ নিযনতরিত ঘর চাই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.81769
-    
-    CHOSEN SAMPLE NO.: 10
-    
-    Epoch: 2 Iteration: 8
-    
-    SAMPLE TEXT:
-    i would like you to come with me <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দেখো। চাই। রাখন। টমের শনিনি। চপ না। অনেক গেলো। পারি আগে যাবেন
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি চাই তমি আমার সাথে আসো। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.25251
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 2 Iteration: 9
-    
-    SAMPLE TEXT:
-    see above <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    একবার। <EOS> যান। এটা এটি ছিলো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    উপরে দেখন। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.36901
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 2 Iteration: 10
-    
-    SAMPLE TEXT:
-    i 'm still your friend <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যাক। থেকে পরতযেকদিন একটা ছোট। পেযেছিলাম। সে এখানে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এখনো আপনার বনধ আছি। <EOS> <PAD> <PAD> 
-    
-    loss=3.68839
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 2 Iteration: 11
-    
-    SAMPLE TEXT:
-    just staying alive in these times is hard enough <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    না। ওর পারবে দরকার। <EOS> দিলাম। না। নিরবোধ। টম যাবেন। করি। কর।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এখনকার সময শধ বেচে থাকাটাও যথেষট কঠিন। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.53596
-    
-    CHOSEN SAMPLE NO.: 32
-    
-    Epoch: 2 Iteration: 12
-    
-    SAMPLE TEXT:
-    i 'm not proud of this <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সময গান টমের তমি এমনিতে চেচাচছে সময বযপারে সবাই হারিযে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি এটায গরবিত নই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.00889
-    
-    CHOSEN SAMPLE NO.: 33
-    
-    Epoch: 2 Iteration: 13
-    
-    SAMPLE TEXT:
-    i 'm busy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পারব দাডাও আপনাকে পরেন <EOS> সময পারছেন
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি বযসত। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.35917
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 2 Iteration: 14
-    
-    SAMPLE TEXT:
-    is there any mail for me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটা <EOS> <EOS> টমের <EOS> <EOS> করলো। মখ চায না
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার জনয কোনো ডাক আছে <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.33615
-    
-    CHOSEN SAMPLE NO.: 40
-    
-    Epoch: 2 Iteration: 15
-    
-    SAMPLE TEXT:
-    you are not paying attention <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    রবিবার ওঠো মাংস চাই একমাতর নাও। কি চাই বনধ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কিনত মনোযোগ দিচছো না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.56014
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 2 Iteration: 16
-    
-    SAMPLE TEXT:
-    eat something <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বযকতি। বসবাস থেকে <EOS> আছি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কিছ খেযে নিন। <EOS> <PAD> 
-    
-    loss=4.05344
-    
-    CHOSEN SAMPLE NO.: 52
-    
-    Epoch: 2 Iteration: 17
-    
-    SAMPLE TEXT:
-    she did not tell me her name <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমের করেছে বলতে টমকে রাখন। বলে আপনার দাডালেন। একলা চিৎকার দেখে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও আমাকে ওর নাম বলেনি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.983
-    
-    CHOSEN SAMPLE NO.: 43
-    
-    Epoch: 2 Iteration: 18
-    
-    SAMPLE TEXT:
-    where would tom go <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    না। যা টম দিন। আমি <EOS> আমি করব।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম আর কোথায যাবে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.51351
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 2 Iteration: 19
-    
-    SAMPLE TEXT:
-    tom 's deaf <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টমের আপনার বাডি এটা আমি কি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম বধির। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.63925
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 2 Iteration: 20
-    
-    SAMPLE TEXT:
-    i give you my word <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খালি আছে। <EOS> করা এই আপনি আমি আমাদের নেই।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তোমাকে কথা দিলাম। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.8243
-    
-    CHOSEN SAMPLE NO.: 26
-    
-    Epoch: 2 Iteration: 21
-    
-    SAMPLE TEXT:
-    you can study here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বাডিতে তিনি আমার <EOS> আমার মারলাম। কাছে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি এখানে পডাশোনা করতে পার। <EOS> <PAD> 
-    
-    loss=4.09468
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 2 Iteration: 22
-    
-    SAMPLE TEXT:
-    do not come in <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ধরে হাসলো। যাও। নাম ভেবে লডবো। যা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ভেতরে আসবেন না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.10425
-    
-    CHOSEN SAMPLE NO.: 33
-    
-    Epoch: 2 Iteration: 23
-    
-    SAMPLE TEXT:
-    i 'm genuinely happy for tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম ভাগ আমার চাই। কার চাই। আমি বলে না।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি পরকতই টমের জনয খশি হযেছি। <EOS> <PAD> <PAD> 
-    
-    loss=4.53609
-    
-    CHOSEN SAMPLE NO.: 45
-    
-    Epoch: 2 Iteration: 24
-    
-    SAMPLE TEXT:
-    no one knew it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    জিজঞাসা আছে। টম আপনাকে উনি গাডি আমার কি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কেউই এটা জানতো না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.51969
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 2 Iteration: 25
-    
-    SAMPLE TEXT:
-    hello <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি ফোন খায। আছে। যাবে তোমার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    নমসকার <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.11391
-    
-    CHOSEN SAMPLE NO.: 22
-    
-    Epoch: 2 Iteration: 26
-    
-    SAMPLE TEXT:
-    i like him <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    হাসলো। চিৎকার বাডি। পারবে <EOS> চাই
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার ওকে ভালো লাগে। <EOS> <PAD> 
-    
-    loss=4.05172
-    
-    CHOSEN SAMPLE NO.: 50
-    
-    Epoch: 2 Iteration: 27
-    
-    SAMPLE TEXT:
-    tom is living in boston <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কেন চাই। <EOS> ভালো ফল আমি <EOS> আমি চর
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম বসটনে থাকছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.79604
-    
-    CHOSEN SAMPLE NO.: 40
-    
-    Epoch: 2 Iteration: 28
-    
-    SAMPLE TEXT:
-    this is not a good sign <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    যারা <EOS> বইটা ওদের আপনি <EOS> টম দটো <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটা ভালো লকষণ নয। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.27584
-    
-    CHOSEN SAMPLE NO.: 61
-    
-    Epoch: 2 Iteration: 29
-    
-    SAMPLE TEXT:
-    keep it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পারেন। সময দিন। এখানে। কোরো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটা রাখন। <EOS> <PAD> <PAD> 
-    
-    loss=3.62392
-    
-    CHOSEN SAMPLE NO.: 4
-    
-    Epoch: 2 Iteration: 30
-    
-    SAMPLE TEXT:
-    your time is up <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> এই পারি একমত। এখনো আর <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার সময শেষ। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.58457
-    
-    CHOSEN SAMPLE NO.: 47
-    
-    Epoch: 2 Iteration: 31
-    
-    SAMPLE TEXT:
-    the station is pretty far <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরতি <EOS> আজ <EOS> দ <EOS> গেছিলেন। আছেন।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    সটেশনটা বেশ কিছটা দরে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.01864
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 2 Iteration: 32
-    
-    SAMPLE TEXT:
-    fill out this form please <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বোঝা দখল চেচালেন। এটা আমাকে বঝতে তিনি কযেক তেশরা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    অনগরহ করে এই ফরমটি পরণ করন। <EOS> <PAD> <PAD> 
-    
-    loss=3.7789
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 2 Iteration: 33
-    
-    SAMPLE TEXT:
-    what is your home address <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বিশবাস টম বনধ দখতে অসফল বলতে <EOS> বাডির
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমার বাডির ঠিকানাটা কী <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.34493
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 2 Iteration: 34
-    
-    SAMPLE TEXT:
-    do not let it get soiled <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    শর নাম খেযে আগে কথা ওনাকে <EOS> অনগরহ ভালো
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটাকে নোংরা হতে দেবেন না। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.15138
-    
-    CHOSEN SAMPLE NO.: 16
-    
-    Epoch: 2 Iteration: 35
-    
-    SAMPLE TEXT:
-    i agree with you <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    তমি তমি কষমা সবাই <EOS> বললেন। করছে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি আপনার সাথে একমত। <EOS> <PAD> <PAD> 
-    
-    loss=3.79577
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 2 Iteration: 36
-    
-    SAMPLE TEXT:
-    tom can read french <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> বসটন আমার আপনার আর গানটা <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম ফরাসি পডতে পারে। <EOS> <PAD> <PAD> 
-    
-    loss=3.9028
-    
-    CHOSEN SAMPLE NO.: 17
-    
-    Epoch: 2 Iteration: 37
-    
-    SAMPLE TEXT:
-    turn left here <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ওটার ভলে টম মযাকডোনালডসের <EOS> রাখতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এখান থেকে বাদিকে নিন। <EOS> <PAD> 
-    
-    loss=3.68729
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 2 Iteration: 38
-    
-    SAMPLE TEXT:
-    who is speaking <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি অনগরহ <EOS> যা <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কে কথা বলছে <EOS> <PAD> 
-    
-    loss=4.41564
-    
-    CHOSEN SAMPLE NO.: 3
-    
-    Epoch: 2 Iteration: 39
-    
-    SAMPLE TEXT:
-    you you will need a ticket to travel by bus <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    টম আমি <EOS> নাম না। মালপতরটা সঠিক। <EOS> আমি <EOS> <EOS> <EOS> কমই আমার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    বাসে করে ঘরতে হলে আপনাকে টিকিট কাটতে হবে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.66935
-    
-    CHOSEN SAMPLE NO.: 0
-    
-    Epoch: 2 Iteration: 40
-    
-    SAMPLE TEXT:
-    do not speak <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ভালো তাইতো তাই এখান বযস। বাকি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কথা বলবেন না। <EOS> <PAD> <PAD> 
-    
-    loss=4.18294
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 2 Iteration: 41
-    
-    SAMPLE TEXT:
-    you ought to ask him for advice <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বঝি আঙর আসবেন অবসথাটা হচছে আমাকে আজ ইনি আর ভাষা সেটা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনার ওনাকে পরামরশের জনয জিজঞাসা করা উচিৎ। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.1447
-    
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 2 Iteration: 42
-    
-    SAMPLE TEXT:
-    i teach english <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিচছেন করে। জিজঞাসা বাডিতে কি আমাদের
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ইংরাজি পডাই। <EOS> <PAD> <PAD> 
-    
-    loss=4.09819
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 2 Iteration: 43
-    
-    SAMPLE TEXT:
-    what time do you usually get up <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ছিলো। ভালো করি। টম <EOS> <EOS> কি <EOS> টম <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি এমনিতে কটার সময ঘম থেকে ওঠো <EOS> <PAD> <PAD> 
-    
-    loss=4.50791
-    
-    CHOSEN SAMPLE NO.: 14
-    
-    Epoch: 2 Iteration: 44
-    
-    SAMPLE TEXT:
-    i used to play tennis <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কথা খাচছিল। গেছিলো। বধির। তারিফ <EOS> করছিলো। কর। দীরঘতম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি টেনিস খেলতাম। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.87848
-    
-    CHOSEN SAMPLE NO.: 24
-    
-    Epoch: 2 Iteration: 45
-    
-    SAMPLE TEXT:
-    i do not want to go with tom <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটা পাবো। যথেষট আজ তোমরা যান। পারি হাসানোর বলছেন কথা আছি। পরেছিল।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি টমের সাথে যেতে চাই না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.22809
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 2 Iteration: 46
-    
-    SAMPLE TEXT:
-    where do you live <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    শেষ। <EOS> <EOS> <EOS> সময সটেশন আল <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি কোথায থাকো <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.53752
-    
-    CHOSEN SAMPLE NO.: 31
-    
-    Epoch: 2 Iteration: 47
-    
-    SAMPLE TEXT:
-    turn left at the corner <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পছনদ <EOS> করে করলো। <EOS> <EOS> টম ওনাকে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মোডে গিযে বাদিকে বেকে যাবেন। <EOS> <PAD> <PAD> 
-    
-    loss=4.91523
-    
-    CHOSEN SAMPLE NO.: 29
-    
-    Epoch: 2 Iteration: 48
-    
-    SAMPLE TEXT:
-    that is my cat <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কাজই থাকো। ঘমাতে ওর না। <EOS> <EOS> করি।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওটা আমার বিডাল। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.53141
-    
-    CHOSEN SAMPLE NO.: 2
-    
-    Epoch: 2 Iteration: 49
-    
-    SAMPLE TEXT:
-    this will cost €30 <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বনধ। পেযেছিলাম। আসেনি। <EOS> তমি পরথম দেখেছি। বযাথা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এটার দাম পডবে €৩০। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.54887
-    
-    CHOSEN SAMPLE NO.: 55
-    
-    Epoch: 2 Iteration: 50
-    
-    SAMPLE TEXT:
-    tom 's alone <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    আছেন একটা চেচালো। ফোন টম বেকে গরনথাগারে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম একলা আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.6899
-    
-    CHOSEN SAMPLE NO.: 63
-    
-    Epoch: 2 Iteration: 51
-    
-    SAMPLE TEXT:
-    i do not agree with him <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> করে থাকে। কি তমি রাখেন। কাছ আটটার খশি বাবা
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওনার সাথে একমত নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.25289
-    
-    CHOSEN SAMPLE NO.: 59
-    
-    Epoch: 3 Iteration: 1
-    
-    SAMPLE TEXT:
-    they have not done anything wrong <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এটা সবাই এটা ছিলে। দাডিযেছিলো। আওযাজ আমি কি আপনি দেখতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওনারা কোনো ভল কিছ তো করেননি। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.03251
-    
-    CHOSEN SAMPLE NO.: 10
-    
-    Epoch: 3 Iteration: 2
-    
-    SAMPLE TEXT:
-    when did you begin studying english <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> <EOS> কোথায তাই কি মারলাম। ওটার দেখা আমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আপনি ইংরাজি পডা কবে থেকে শর করলেন <EOS> <PAD> 
-    
-    loss=4.20393
-    
-    CHOSEN SAMPLE NO.: 11
-    
-    Epoch: 3 Iteration: 3
-    
-    SAMPLE TEXT:
-    what time do you usually go to bed <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    দিন খান। না। এটা তোর দিযেছে। ছেডে সাথে দাত পরশনের করছিস করে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তমি এমনিতে কটার সময ঘমাতে যাও <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.90957
-    
-    CHOSEN SAMPLE NO.: 2
-    
-    Epoch: 3 Iteration: 4
-    
-    SAMPLE TEXT:
-    some of my friends can speak french well <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সটেশন শেষ দিযেছি। যাবে। শিখতে খেলোযার। এসে থাক। ওনার <EOS> ওঠো।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার বনধদের মধযে কেউ কেউ ভালো ফরাসি বলতে পারে। <EOS> <PAD> 
-    
-    loss=4.24333
-    
-    CHOSEN SAMPLE NO.: 18
-    
-    Epoch: 3 Iteration: 5
-    
-    SAMPLE TEXT:
-    we won <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    নয। ভালো কষমাপরারথনা চান বাস
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা জিতে গেছে। <EOS> <PAD> 
-    
-    loss=4.04047
-    
-    CHOSEN SAMPLE NO.: 19
-    
-    Epoch: 3 Iteration: 6
-    
-    SAMPLE TEXT:
-    my stomach hurts after meals <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    না। বাবার ভাবে <EOS> জানি। ফরাসি করবেন কথা টম
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    খাওযার পর আমার পেট বযাথা করে। <EOS> <PAD> <PAD> 
-    
-    loss=3.96237
-    
-    CHOSEN SAMPLE NO.: 13
-    
-    Epoch: 3 Iteration: 7
-    
-    SAMPLE TEXT:
-    i like him <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    মিথযা কর। আমি কাটতে আমার আর
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি তাকে পছনদ করি। <EOS> <PAD> 
-    
-    loss=3.37837
-    
-    CHOSEN SAMPLE NO.: 35
-    
-    Epoch: 3 Iteration: 8
-    
-    SAMPLE TEXT:
-    i 'm not a doctor <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    সময অনয আমি দরজাটা <EOS> <EOS> সবাই <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ডাকতার নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.29195
-    
-    CHOSEN SAMPLE NO.: 58
-    
-    Epoch: 3 Iteration: 9
-    
-    SAMPLE TEXT:
-    what will you be doing at this time tomorrow <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পরোপরি আমার টম ঠিক মা শতরর <EOS> শিখতে চিৎকার সাথে খেতে হাসপাতালে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    কাল তমি এই সময কি করবে <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.69243
-    
-    CHOSEN SAMPLE NO.: 56
-    
-    Epoch: 3 Iteration: 10
-    
-    SAMPLE TEXT:
-    do not call me <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বডো আসছেন পডে। খরগোশ বাইরে পেতে তোমার হবে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমাকে ডেকো না। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.56516
-    
-    CHOSEN SAMPLE NO.: 57
-    
-    Epoch: 3 Iteration: 11
-    
-    SAMPLE TEXT:
-    who is he <EOS> <PAD> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> নডলস দেখাবেন জানি আজ চটপটে।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ও কে <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=4.09663
-    
-    CHOSEN SAMPLE NO.: 53
-    
-    Epoch: 3 Iteration: 12
-    
-    SAMPLE TEXT:
-    we will try <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    কি না। মজা করি। সকালে আমি
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমরা চেষটা করব। <EOS> <PAD> <PAD> 
-    
-    loss=3.98838
-    
-    CHOSEN SAMPLE NO.: 9
-    
-    Epoch: 3 Iteration: 13
-    
-    SAMPLE TEXT:
-    she can say whatever she wants <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> করা এমনিতে <EOS> কিছ <EOS> <EOS> আমার আজ
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    ওনার যা ইচছে উনি বলতে পারেন। <EOS> <PAD> <PAD> 
-    
-    loss=4.78535
-    
-    CHOSEN SAMPLE NO.: 48
-    
-    Epoch: 3 Iteration: 14
-    
-    SAMPLE TEXT:
-    how can i get to gate a-1 <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    এই ইচছা কষমা <EOS> ওইগলো পেলাম। দেখলো। তার আপনার সাহাযয
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি a-1 গেটে কিভাবে যাব <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.21944
-    
-    CHOSEN SAMPLE NO.: 32
-    
-    Epoch: 3 Iteration: 15
-    
-    SAMPLE TEXT:
-    why are you shouting <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    খবর সাবধান লাগে। চালাবার দ দাত ফরাসিতেও দিলাম।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমরা চিৎকার করছো কেন <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.64164
-    
-    CHOSEN SAMPLE NO.: 12
-    
-    Epoch: 3 Iteration: 16
-    
-    SAMPLE TEXT:
-    these are birds <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    বরণানকরমে করবেন। শেষের পারে। বললেন সতযি পারটিতে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    এইগলো পাখি। <EOS> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.55749
-    
-    CHOSEN SAMPLE NO.: 39
-    
-    Epoch: 3 Iteration: 17
-    
-    SAMPLE TEXT:
-    it looks like tom has broken a couple of ribs <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    ওটা আর করি। তিনি কি আমরা এসে <EOS> বেকে ঘাড আমি শনলো। যাবেন খাই।
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    মনে হচছে টমের কযেকটা পাজর ভেঙগেছে। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=4.2831
-    
-    CHOSEN SAMPLE NO.: 31
-    
-    Epoch: 3 Iteration: 18
-    
-    SAMPLE TEXT:
-    i do not want to be like that <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    থেকে ভেতরে <EOS> ফরাসি আমার কষণিকের বলতে <EOS> <EOS> কি <EOS> <EOS>
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমি ওইরকম হতে চাই না। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
-    
-    loss=3.93504
+    loss=0.466606
     
     CHOSEN SAMPLE NO.: 8
     
-    Epoch: 3 Iteration: 19
+    Epoch: 128 Iteration: 46
     
     SAMPLE TEXT:
-    me too <EOS> 
+    stop that woman <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    এ <EOS> <EOS> <EOS> কি মেরিকে
+    ওই ফিরে আটকাও। <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমিও। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    ওই মহিলাটিকে থামান। <EOS> <PAD> <PAD> 
     
-    loss=3.31524
+    loss=0.628224
     
-    CHOSEN SAMPLE NO.: 32
+    CHOSEN SAMPLE NO.: 30
     
-    Epoch: 3 Iteration: 20
+    Epoch: 128 Iteration: 47
     
     SAMPLE TEXT:
-    why do you want to hurt tom <EOS> 
+    do you have my book <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> পারি। আর করেছে। কাছে দিযে কঠিন। মডতে কোনো পরেমে লিখলো।
+    আমার কাছে কি ভালো বইটা আছে <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনি টমকে আঘাত দিতে চান কেন <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আপনার কাছে কি আমার বইটা আছে <EOS> <PAD> <PAD> 
     
-    loss=3.9945
+    loss=1.2308
     
-    CHOSEN SAMPLE NO.: 46
+    CHOSEN SAMPLE NO.: 43
     
-    Epoch: 3 Iteration: 21
+    Epoch: 128 Iteration: 48
     
     SAMPLE TEXT:
-    tom was shouting <EOS> 
+    would you like to come inside <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    নিযে টমকে হাসলো। করে করি।
+    তমি কি ভেতরে আসবেন <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম চেচাচছিলো। <EOS> <PAD> <PAD> 
+    আপনারা কি ভেতরে আসবেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=4.44068
+    loss=1.67444
     
-    CHOSEN SAMPLE NO.: 51
+    CHOSEN SAMPLE NO.: 0
     
-    Epoch: 3 Iteration: 22
+    Epoch: 128 Iteration: 49
     
     SAMPLE TEXT:
-    i 'm exhausted <EOS> 
+    are you busy tomorrow night <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    তোদের যে বনধ টম কাছে থেকে
+    কোনো কি কাল আছে <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি কলানত। <EOS> <PAD> <PAD> <PAD> 
+    তই কি কাল রাতে বযসত থাকবি <EOS> <PAD> 
     
-    loss=3.73241
+    loss=0.907989
     
-    CHOSEN SAMPLE NO.: 10
+    CHOSEN SAMPLE NO.: 57
     
-    Epoch: 3 Iteration: 23
+    Epoch: 128 Iteration: 50
     
     SAMPLE TEXT:
-    i do not deny it <EOS> 
+    stand up <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমি সেটা পারব <EOS> <EOS> <EOS> যে তো <EOS>
+    দাডান। <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি এটা অসবীকার করি না। <EOS> <PAD> <PAD> <PAD> 
+    দাডা <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.9017
+    loss=0.790484
     
-    CHOSEN SAMPLE NO.: 20
+    CHOSEN SAMPLE NO.: 21
     
-    Epoch: 3 Iteration: 24
+    Epoch: 128 Iteration: 51
     
     SAMPLE TEXT:
-    stop tom <EOS> 
+    tom did that himself <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> <EOS> টমকে সে আমি
+    টম ওটা বযবসথা <EOS> <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টমকে আটকান। <EOS> <PAD> <PAD> 
+    টম ওটা নিজেই করলো। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.58409
+    loss=0.93948
+    
+    CHOSEN SAMPLE NO.: 56
+    
+    Epoch: 129 Iteration: 1
+    
+    SAMPLE TEXT:
+    tom is still at school <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    টম এখনো নামবার <EOS> <EOS> <EOS> <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    টম এখনো ইসকলে। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=0.921481
+    
+    CHOSEN SAMPLE NO.: 15
+    
+    Epoch: 129 Iteration: 2
+    
+    SAMPLE TEXT:
+    were you there <EOS> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    তমি কি ওখানে ছিলে <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    তমি কি ওখানে ছিলে <EOS> <PAD> 
+    
+    loss=0.486593
+    
+    CHOSEN SAMPLE NO.: 58
+    
+    Epoch: 129 Iteration: 3
+    
+    SAMPLE TEXT:
+    is there a public toilet in this building <EOS> <PAD> 
+    
+    
+    PREDICTED TRANSLATION OF THE SAMPLE:
+    
+    এই কি কি এই আছে আছে আছে <EOS> <EOS> <EOS> <EOS> <EOS>
+    
+    ACTUAL TRANSLATION OF THE SAMPLE:
+    
+    এই ইমারতটিতে কি কোনো সরবজনীন শৌচাগার আছে <EOS> <PAD> <PAD> <PAD> <PAD> 
+    
+    loss=1.76835
     
     CHOSEN SAMPLE NO.: 28
     
-    Epoch: 3 Iteration: 25
+    Epoch: 129 Iteration: 4
     
     SAMPLE TEXT:
-    maybe it will snow <EOS> <PAD> 
+    i 'm not tom <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    চেষটা থাকব। বলবেন জিজঞাসা লাঞচ আগে <EOS> হযেছে।
+    আমি এখনই নই। <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    হযতো বরফ পরবে। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আমি টম নই। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.66221
+    loss=0.733902
     
-    CHOSEN SAMPLE NO.: 10
+    CHOSEN SAMPLE NO.: 59
     
-    Epoch: 3 Iteration: 26
+    Epoch: 129 Iteration: 5
     
     SAMPLE TEXT:
-    tom visited boston <EOS> 
+    do you understand french <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    খালি চাও ভাগনা থাকলো। চলে না।
+    তমি কি ফরাসি ভাষা বলতে <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম বসটন গেছিলেন। <EOS> <PAD> <PAD> 
+    আপনি কি ফরাসি ভাষা বঝতে পারো <EOS> 
     
-    loss=3.76476
+    loss=0.842568
     
-    CHOSEN SAMPLE NO.: 17
+    CHOSEN SAMPLE NO.: 27
     
-    Epoch: 3 Iteration: 27
+    Epoch: 129 Iteration: 6
     
     SAMPLE TEXT:
-    tom is definitely not happy <EOS> 
+    i 'm happy to see you again <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> <EOS> আছেন। হযেগেছিলাম। তার আমার টম আমার দেখে
+    আপনাকে আবার দেখে খশি হযেছি। <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    টম সপষটতই খশি নয। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আপনাদেরকে আবার দেখে খশি হযেছি। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.75236
+    loss=1.91991
     
-    CHOSEN SAMPLE NO.: 62
+    CHOSEN SAMPLE NO.: 53
     
-    Epoch: 3 Iteration: 28
+    Epoch: 129 Iteration: 7
     
     SAMPLE TEXT:
-    i 'd like to change my room <EOS> 
+    i could not walk <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    টম ফরাসি নটার <EOS> টম আমি অপেকষা তিনি টমের <EOS> <EOS> <EOS>
+    আমি এবার পারব <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি আমার ঘরটা পালটাতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমি হাটতে পারিনি। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.61722
+    loss=0.91238
     
-    CHOSEN SAMPLE NO.: 18
+    CHOSEN SAMPLE NO.: 0
     
-    Epoch: 3 Iteration: 29
+    Epoch: 129 Iteration: 8
     
     SAMPLE TEXT:
-    why do you want to leave today <EOS> 
+    i want to be as rich as tom <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    এই লোকটা কেউ <EOS> ওটা আওযাজ বযস গেলাম। <EOS> আছেন <EOS>
+    আমি ওই টমের হতে হতে <EOS> <EOS> <EOS> <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আপনারা আজকেই যেতে চাইছেন কেন <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
+    আমি টমের মত ধনী হতে চাই। <EOS> <PAD> <PAD> <PAD> <PAD> <PAD> 
     
-    loss=3.86553
+    loss=1.78097
     
-    CHOSEN SAMPLE NO.: 2
+    CHOSEN SAMPLE NO.: 4
     
-    Epoch: 3 Iteration: 30
+    Epoch: 129 Iteration: 9
     
     SAMPLE TEXT:
-    what does your son do <EOS> 
+    you should eat vegetables <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    তার গাইতে তই হোককাইডো বনধ অপেকষা কেউ আপনি
+    তোমার শাকসবজি খাওযা উচিত। উচিত। <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    তোমার ছেলে কি করে <EOS> <PAD> <PAD> <PAD> 
+    তোমার শাকসবজি খাওযা উচিত। <EOS> <PAD> <PAD> <PAD> 
     
-    loss=4.32078
-    
-    CHOSEN SAMPLE NO.: 10
-    
-    Epoch: 3 Iteration: 31
-    
-    SAMPLE TEXT:
-    have you finished it <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    চায যোগয। বযবহার করতে কি করব। দর
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    তোমাদের ওটা করা হযে গেছে <EOS> <PAD> 
-    
-    loss=3.97464
+    loss=0.584272
     
     CHOSEN SAMPLE NO.: 52
     
-    Epoch: 3 Iteration: 32
+    Epoch: 129 Iteration: 10
     
     SAMPLE TEXT:
-    i 'm still your friend <EOS> 
+    do come again <EOS> <PAD> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    টম মা <EOS> <EOS> করে। টমের কাজ <EOS>
+    আবার আসবে কিনত। <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি এখনো তোমার বনধ আছি। <EOS> <PAD> <PAD> 
+    আবার আসবে কিনত। <EOS> <PAD> <PAD> 
     
-    loss=4.03356
+    loss=0.749034
     
-    CHOSEN SAMPLE NO.: 63
+    CHOSEN SAMPLE NO.: 58
     
-    Epoch: 3 Iteration: 33
+    Epoch: 129 Iteration: 11
     
     SAMPLE TEXT:
-    i do not agree with him <EOS> 
+    we will scream <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    আমাদের গবেষণাটি তিনি ছাডে ফরাসিতে <EOS> <EOS> অপেকষা <EOS> <EOS>
+    আমরা চেচাবো। <EOS> <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    আমি ওনার সাথে একমত নই। <EOS> <PAD> <PAD> <PAD> <PAD> 
+    আমরা চিৎকার করবো। <EOS> <PAD> <PAD> 
     
-    loss=4.01831
+    loss=0.519659
     
-    CHOSEN SAMPLE NO.: 12
+    CHOSEN SAMPLE NO.: 18
     
-    Epoch: 3 Iteration: 34
+    Epoch: 129 Iteration: 12
     
     SAMPLE TEXT:
-    here 's your mug <EOS> 
+    do you have time <EOS> 
     
     
     PREDICTED TRANSLATION OF THE SAMPLE:
     
-    <EOS> কার হযে টম তমি টম অঙক বনধ
+    আপনার হাতে সময আছে আছে <EOS> <EOS> <EOS>
     
     ACTUAL TRANSLATION OF THE SAMPLE:
     
-    এই নিন আপনার মগ। <EOS> <PAD> <PAD> <PAD> 
+    তোমার হাতে সময আছে <EOS> <PAD> <PAD> <PAD> 
     
-    loss=3.55271
-    
-    CHOSEN SAMPLE NO.: 5
-    
-    Epoch: 3 Iteration: 35
-    
-    SAMPLE TEXT:
-    tom screamed loudly <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    পারবেন দিকে <EOS> আপনাকে তোমার
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    টম জোরে চেচালো। <EOS> <PAD> 
-    
-    loss=4.35615
+    loss=0.776177
     
     CHOSEN SAMPLE NO.: 26
     
-    Epoch: 3 Iteration: 36
+    Epoch: 129 Iteration: 13
     
     SAMPLE TEXT:
-    eat anything you like <EOS> 
+    i eat everything <EOS> 
+    .
+    .
+    .
+
+
+
+```python
+def word2vec(word):
+    if word in vocab_eng:
+        return np_embedding_eng[vocab_eng.index(word)]
+    else:
+        return np_embedding_eng[vocab_eng.index('<PAD>')]
+```
+
+### Prediction.
+
+
+```python
+with tf.Session() as sess: # Begin session
+    
+    print('Loading pre-trained weights for the model...')
+    saver = tf.train.Saver()
+    saver.restore(sess, 'Model_Backup/translation_model.ckpt')
+    sess.run(tf.global_variables())
+    print('\nRESTORATION COMPLETE\n')
     
     
-    PREDICTED TRANSLATION OF THE SAMPLE:
+    test = ['who','are','you'] # Enter tokenized text here
+    test = map(word2vec,test)
+    test = np.asarray(test,np.float32)
+    test = test.reshape((1,test.shape[0],test.shape[1]))
     
-    পৌনে <EOS> <EOS> আমি জযাকসন। মাছ অসফল খরগোশ
+    input_seq_len = test.shape[0]
+    pe_in = positional_encoding(input_seq_len,word_vec_dim)
+    pe_in = pe_in.reshape((1,input_seq_len,word_vec_dim))
+    test_pe = test+pe_in
     
-    ACTUAL TRANSLATION OF THE SAMPLE:
+    output_seq_len = int(input_seq_len+20)
+    illegal_position_masks = generate_masks_for_illegal_positions(output_seq_len)
+    pe_out = positional_encoding(output_seq_len,word_vec_dim) 
+    pe_out = pe_out.reshape((output_seq_len,1,word_vec_dim))
+        
+    out = sess.run(softmax_output,
+                          feed_dict={x: test_pe,
+                                     y: np.zeros((1,1),np.int32), 
+                                     # y value doesn't matter here.
+                                     # feeding y, because the network graph requires y.
+                                     # but its value won't actually be used in this case. 
+                                     keep_prob: 1,
+                                     output_len: output_seq_len,
+                                     tf_pe_out: pe_out,
+                                     tf_illegal_position_masks: illegal_position_masks,
+                                     teacher_forcing: False
+                                    })
+
+    for array in out[0]:
+        if vocab_beng[np.argmax(array)] != '<EOS>':
+            print(vocab_beng[np.argmax(array)],end=' ')
     
-    তোমাদের যা কিছ পছনদ হয তাই খাও। <EOS> 
+
+
+```
+
+    Loading pre-trained weights for the model...
+    INFO:tensorflow:Restoring parameters from Model_Backup/translation_model.ckpt
     
-    loss=3.52522
+    RESTORATION COMPLETE
     
-    CHOSEN SAMPLE NO.: 1
-    
-    Epoch: 3 Iteration: 37
-    
-    SAMPLE TEXT:
-    my father is busy <EOS> 
-    
-    
-    PREDICTED TRANSLATION OF THE SAMPLE:
-    
-    <EOS> তার চিৎকার <EOS> আপনার <EOS> <EOS> কাছে
-    
-    ACTUAL TRANSLATION OF THE SAMPLE:
-    
-    আমার বাবা বযসত আছে। <EOS> <PAD> <PAD> <PAD> 
-    
-    loss=3.57193
-    
-    CHOSEN SAMPLE NO.: 62
-    
-    Epoch: 3 Iteration: 38
-    
-    SAMPLE TEXT:
-    wonderful <EOS> <PAD> 
+    আপলোড করছিল। করছিস করছিল। করছিল। করছিল। করছিস করছিস করছিস করছিস করছিল। করছিস করছিস করছিস করছিল। 
+
+### Some comments:
+
+The model seems to fit well on the training data even using only 1 layer of encoder and decoder.
+In fact, it seems to be fitting better when I am training with 1 layer of encoder and decoder.
+However, I suppose the model is most likely 'memorizing' and overfitting. I tried some predictions below,
+the results aren't good. Things will become clearer with validation, evaluation metrics and testing. 
+
+
+At each timestep the decoder output is in the format batch_size x sequence_length x word_vector_dimensions.
+I am first adding the decoder output along the second axis, to transform the shape into batch_size x word_vector_dimensions.
+This should effectively be a weighted summation, and the 'weights' can be though to be assigned by all these encoder decoder attention layers.
+
+I am not sure what the original implementation does with the decoder output before converting it linearly into a probability distribution.
+
+I am using output language word embedding matrix (say E) to convert the transformed decoder output into a probability distribution.
+
+Probability distribution of next word = transpose(E) x (decoder_output after summation along 2nd axis)
+
+The paper recommended something along that line. Using embedding matrix seemed to produce much better results. 
+
+Even though, I included an option to use randomzied teacher's forcing, I kept teacher forcing off through out this training to check if it can still fit on the training data. 
+
+
+### TO DO
+
+* Evaluation (BLEU\METEOR etc.)
+* Validation
+* Testing 
+
+(For now, I was just checking if the model can at least fit on the training data- whether it overfits or not is to yet to be checked)
     
