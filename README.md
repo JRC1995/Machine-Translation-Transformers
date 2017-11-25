@@ -2041,7 +2041,7 @@ I am not sure what the original implementation does with the decoder output befo
 
 I am using output language word embedding matrix (say E) to convert the transformed decoder output into a probability distribution.
 
-Probability distribution of next word = transpose(E) x (decoder_output after summation along 2nd axis)
+Probability distribution of next word = (decoder_output after summation along 2nd axis) x transpose(E)
 
 The paper recommended something along that line. Using embedding matrix seemed to produce much better results. 
 
