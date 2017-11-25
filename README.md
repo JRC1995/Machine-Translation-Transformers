@@ -1,9 +1,8 @@
 
 
-# CAUTION: UNDER CONSTRUCTION. 
+# Machine Translation (English to Bengali) using Transformers. 
 
-
-he model is based on:
+The model is based on:
 
 ["Attention Is All You Need" by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin. arXiv:1706.03762](https://arxiv.org/abs/1706.03762) 
 
@@ -819,7 +818,7 @@ test_batch_y = PICK[9]
     
 ```
 
-### Function for converting vector of size word_vec_dim into the closest reprentative english word. 
+### Function for converting vector of size word_vec_dim into the closest representative english word. 
 
 
 ```python
@@ -1403,7 +1402,7 @@ softmax_output = tf.nn.softmax(output)
 
 ```
 
-### Function to create a Mask for effect of PADs on cost
+### Function to create a Mask for pads' effect on cost. 
 
 The mask will have the same shape as the batch of labels but with the value 0 wherever there is a PAD.
 The mask will be element-wise multipled to the cost (before its averaged), so that any position in the cost tensor that is effected by the PAD will be multiplied by 0. This way, the effect of PADs (which we don't need to care about) on the cost (and therefore on the gradients) can be nullified. 
