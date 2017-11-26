@@ -1589,7 +1589,7 @@ with tf.Session() as sess: # Start Tensorflow Session
     .
     .
     .
-        CHOSEN SAMPLE NO.: 20
+    CHOSEN SAMPLE NO.: 20
     
     Epoch: 128 Iteration: 44
     
