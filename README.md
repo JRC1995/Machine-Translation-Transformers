@@ -1331,7 +1331,11 @@ def model(x,y,teacher_forcing=True):
         # decoderout shape (now) = batch_size x seq_len x word_vec_dim
 
         decoderout = tf.reduce_sum(decoderout,1) 
-        # A weighted summation of the attended decoder input
+        
+        # summation over all the word_vec_dim dimensional vectors in the sequence to transform dimensions
+        # from batch_size x seq_len x word_vec_dim to batch_size x word_vec_dim.
+        # I suppose, a Linear layer can be alternatively used here too.
+        
         # decoderout shape (now) = batch_size x word_vec_dim
         
         # converting decoderout to probability distributions
