@@ -2036,10 +2036,14 @@ In fact, it seems to be fitting better when I am training with 1 layer of encode
 However, I suppose the model is most likely 'memorizing' and overfitting. I tried some predictions below,
 the results aren't good. Things will become clearer with validation, evaluation metrics and testing. 
 
+Also the model may not really learn to generalize very well, given that there are only **4378** data samples.
+Most deep learning model will probably overfit on this. 
 
 At each timestep the decoder output is in the format batch_size x sequence_length x word_vector_dimensions.
-I am first adding the decoder output along the second axis, to transform the shape into batch_size x word_vector_dimensions.
-This should effectively be a weighted summation, and the 'weights' can be though to be assigned by all these encoder decoder attention layers.
+I am then adding the decoder output along the second axis, to transform the shape into batch_size x word_vector_dimensions.
+This should ensure that the final output is influenced by all the vectors in the immediate decoder output. 
+A linear layer may be usable to achieve this goal too, but a summation seems to work - at least in fitting the data.
+And a simple summation won't require extra parameters. 
 
 I am not sure what the original implementation does with the decoder output before converting it linearly into a probability distribution.
 
