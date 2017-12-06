@@ -2053,7 +2053,7 @@ Probability distribution of next word = (decoder_output after summation along 2n
 
 The paper recommended something along that line. Using embedding matrix seemed to produce much better results. 
 
-Even though, I included an option to use randomzied teacher's forcing, I kept teacher forcing off through out this training to check if it can still fit on the training data. 
+Even though I included an option to use randomzied teacher's forcing, I kept teacher forcing off throughout this training to check if it can still fit on the training data. 
 
 
 ### TO DO
